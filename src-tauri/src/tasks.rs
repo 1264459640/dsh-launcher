@@ -329,6 +329,16 @@ async fn install_version_streamed(
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建版本目录失败: {e}"))?;
     let store_dir = state.data_dir.join(".pnpm-store");
 
+    // pnpm (>=10) ignores dependency build scripts by default, which would
+    // skip native modules like node-pty / koffi. A workspace manifest inside
+    // the install dir opts back into running all build scripts.
+    let ws_manifest = dir.join("pnpm-workspace.yaml");
+    let ws_content = "onlyBuiltDependencies:\n  - '*'\n";
+    if !ws_manifest.exists() {
+        std::fs::write(&ws_manifest, ws_content)
+            .map_err(|e| format!("写入 pnpm-workspace.yaml 失败: {e}"))?;
+    }
+
     // Make sure a pnpm executable is available before installing: use the
     // system one if present, otherwise bootstrap the latest pnpm into the
     // launcher's data dir via npm.
