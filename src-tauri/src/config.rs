@@ -137,7 +137,10 @@ pub struct InstanceStatus {
 pub fn load_config(path: &Path) -> Config {
     match fs::read_to_string(path) {
         Ok(raw) => match serde_json::from_str::<Config>(&raw) {
-            Ok(cfg) => cfg,
+            Ok(mut cfg) => {
+                dedupe_homes(&mut cfg);
+                cfg
+            }
             Err(err) => {
                 // Back up the broken file and start fresh.
                 let _ = fs::copy(path, path.with_extension("json.bak"));
@@ -147,6 +150,42 @@ pub fn load_config(path: &Path) -> Config {
         },
         Err(_) => Config::default(),
     }
+}
+
+/// Case-insensitive path equality (Windows filesystems are case-insensitive).
+pub fn paths_equal(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+    } else {
+        a == b
+    }
+}
+
+/// Merge HOME records that point at the same path, keeping the first and
+/// redirecting instance references to the surviving home id (cleans up
+/// duplicates created before path-based reuse existed).
+pub fn dedupe_homes(cfg: &mut Config) {
+    if cfg.homes.len() < 2 {
+        return;
+    }
+    let mut kept: Vec<DshHome> = Vec::new();
+    let mut redirect: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for home in &cfg.homes {
+        if let Some(existing) = kept.iter().find(|e| paths_equal(&e.path, &home.path)) {
+            redirect.insert(home.id.clone(), existing.id.clone());
+        } else {
+            kept.push(home.clone());
+        }
+    }
+    if redirect.is_empty() {
+        return;
+    }
+    for inst in &mut cfg.instances {
+        if let Some(new_id) = redirect.get(&inst.home_id) {
+            inst.home_id = new_id.clone();
+        }
+    }
+    cfg.homes = kept;
 }
 
 pub fn save_config(path: &Path, cfg: &Config) -> Result<(), String> {

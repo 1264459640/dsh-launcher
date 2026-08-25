@@ -32,6 +32,7 @@ pub struct TaskInfo {
     pub created_at: i64,
     pub message: Option<String>,
     pub instance_id: Option<String>,
+    pub instance_name: Option<String>,
     pub logs: Vec<String>,
     #[serde(skip)]
     pub child: Option<Arc<Mutex<Option<tokio::process::Child>>>>,
@@ -109,6 +110,18 @@ pub async fn start_create_instance_task(
             return Err("DSH_HOME 不存在".to_string());
         }
     }
+    // Also reject a running/pending task that will create the same instance
+    // name once it finishes (prevents duplicate name submissions).
+    {
+        let tasks = state.tasks.lock().await;
+        for task in tasks.values() {
+            if task.state == TaskState::Running
+                && task.instance_name.as_deref() == Some(name.as_str())
+            {
+                return Err("同名实例的下载任务已在进行中".to_string());
+            }
+        }
+    }
 
     let task = TaskInfo {
         id: new_id("t"),
@@ -120,6 +133,7 @@ pub async fn start_create_instance_task(
         created_at: now_millis(),
         message: None,
         instance_id: None,
+        instance_name: Some(name.clone()),
         logs: Vec::new(),
         child: None,
     };

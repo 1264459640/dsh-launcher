@@ -50,7 +50,8 @@ const canConfirm = computed(
     !busy.value &&
     instanceName.value.trim().length > 0 &&
     !!homeId.value &&
-    !store.instances.some((i) => i.name === instanceName.value.trim()),
+    !store.instances.some((i) => i.name === instanceName.value.trim()) &&
+    !store.instanceNameBusy(instanceName.value.trim()),
 )
 
 async function onConfirm() {

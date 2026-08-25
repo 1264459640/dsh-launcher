@@ -46,7 +46,7 @@ pnpm dev            # 打开 http://localhost:1420
 
 ## 运行数据
 
-- 启动器配置与数据：`%APPDATA%\cn.ztxy666.dsh-launcher\`
+- 启动器配置与数据：`%APPDATA%\in.dsh-plug\`
   - `config.json`：DSH_HOME / 版本 / 实例 / 设置
   - `versions/<版本>/`：各版本隔离安装目录
   - `homes/<实例名>/`：专属 DSH_HOME（如选择）

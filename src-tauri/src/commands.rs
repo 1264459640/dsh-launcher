@@ -24,7 +24,10 @@ pub fn create_home(
     create_home_record(&state, &name, &path)
 }
 
-/// Shared helper: validates + creates a DSH_HOME record.
+/// Shared helper: validates + creates a DSH_HOME record. If a HOME with the
+/// same (case-insensitively on Windows) path already exists, the existing
+/// record is returned instead of creating a duplicate (prevents duplicate
+/// same-name HOMEs when a dedicated HOME is requested repeatedly).
 pub(crate) fn create_home_record(
     state: &State<'_, AppState>,
     name: &str,
@@ -38,12 +41,25 @@ pub(crate) fn create_home_record(
     if path.is_empty() {
         return Err("路径不能为空".to_string());
     }
-    let path = std::path::PathBuf::from(path);
-    std::fs::create_dir_all(&path).map_err(|e| format!("创建目录失败: {e}"))?;
+    let path_buf = std::path::PathBuf::from(path);
+
+    // Reuse an existing HOME with the same normalized path.
+    {
+        let cfg = state.config.lock().unwrap();
+        if let Some(existing) = cfg
+            .homes
+            .iter()
+            .find(|h| crate::config::paths_equal(&h.path, &path_buf))
+        {
+            return Ok(existing.clone());
+        }
+    }
+
+    std::fs::create_dir_all(&path_buf).map_err(|e| format!("创建目录失败: {e}"))?;
     let home = DshHome {
         id: new_id("h"),
         name: name.to_string(),
-        path,
+        path: path_buf,
     };
     let mut cfg = state.config.lock().unwrap();
     cfg.homes.push(home.clone());

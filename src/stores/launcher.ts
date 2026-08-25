@@ -49,6 +49,10 @@ export const useLauncherStore = defineStore('launcher', {
       s.statusById[id] ?? { id, state: 'stopped', url: null, profile: null, exit_code: null },
     taskList: (s) => Object.values(s.tasks).sort((a, b) => b.created_at - a.created_at),
     runningTaskCount: (s) => Object.values(s.tasks).filter((t) => t.state === 'running').length,
+    instanceNameBusy: (s) => (name: string) =>
+      Object.values(s.tasks).some(
+        (t) => t.state === 'running' && t.instance_name === name,
+      ),
   },
 
   actions: {
@@ -97,6 +101,7 @@ export const useLauncherStore = defineStore('launcher', {
             created_at: Date.now(),
             message: p.message,
             instance_id: p.instance_id,
+            instance_name: null,
             logs: [],
           }
         }

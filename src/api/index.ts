@@ -173,17 +173,24 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       if (!name) fail('实例名称不能为空')
       if (!version) fail('版本号不能为空')
       if (db.instances.some((i) => i.name === name)) fail('同名实例已存在')
+      if ([...mockTasks.values()].some((t) => t.state === 'running' && t.instance_name === name)) {
+        fail('同名实例的下载任务已在进行中')
+      }
 
       let homeId = homeIdArg
       if (dedicated) {
         const safe = name.replace(/[^\w一-龥.-]+/g, '_')
-        const home: DshHome = {
-          id: mockNewId('h'),
-          name,
-          path: `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\homes\\${safe}`,
+        const path = `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\homes\\${safe}`
+        const existing = db.homes.find(
+          (h) => h.path.replace(/\\/g, '/').toLowerCase() === path.replace(/\\/g, '/').toLowerCase(),
+        )
+        if (existing) {
+          homeId = existing.id
+        } else {
+          const home: DshHome = { id: mockNewId('h'), name, path }
+          db.homes.push(home)
+          homeId = home.id
         }
-        db.homes.push(home)
-        homeId = home.id
       }
       if (!homeId || !db.homes.some((h) => h.id === homeId)) fail('请选择 DSH_HOME')
 
@@ -197,6 +204,7 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         created_at: Date.now(),
         message: null,
         instance_id: null,
+        instance_name: name,
         logs: [],
       }
       mockTasks.set(task.id, task)

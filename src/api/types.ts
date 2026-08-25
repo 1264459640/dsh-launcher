@@ -51,6 +51,7 @@ export interface TaskInfo {
   created_at: number
   message: string | null
   instance_id: string | null
+  instance_name: string | null
   logs: string[]
 }
 
