@@ -66,7 +66,8 @@ fn default_theme() -> String {
 }
 
 fn default_news_source() -> String {
-    "https://gist.githubusercontent.com/Gu-ZT/f08daa33afb82f4b375e604039b92742/raw/DSH_NEWS.md".to_string()
+    "https://gist.githubusercontent.com/Gu-ZT/f08daa33afb82f4b375e604039b92742/raw/DSH_NEWS.md"
+        .to_string()
 }
 
 impl Default for LauncherSettings {

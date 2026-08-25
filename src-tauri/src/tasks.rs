@@ -646,7 +646,10 @@ async fn install_version_streamed(
     if !status.success() {
         let logs = {
             let tasks = state.tasks.lock().await;
-            tasks.get(task_id).map(|t| t.logs.clone()).unwrap_or_default()
+            tasks
+                .get(task_id)
+                .map(|t| t.logs.clone())
+                .unwrap_or_default()
         };
         // Pick a meaningful error line instead of the last line (which is
         // often a stack-trace tail like "at process.processTimers (...)").
