@@ -14,6 +14,10 @@ const isTauri = api.isTauri
 onMounted(async () => {
   await store.init()
   locale.value = store.settings.locale || 'zh-CN'
+  // If Node.js is missing, guide the user to install it before anything else.
+  if (!store.runtime?.node?.installed && route.name !== 'setup') {
+    router.push({ name: 'setup' })
+  }
 })
 
 watch(

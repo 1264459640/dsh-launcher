@@ -39,6 +39,17 @@ export interface InstanceStatus {
   exit_code: number | null
 }
 
+export interface ToolStatus {
+  installed: boolean
+  version: string | null
+  path: string | null
+}
+
+export interface RuntimeStatus {
+  node: ToolStatus
+  pnpm: ToolStatus
+}
+
 export type TaskState = 'running' | 'done' | 'error' | 'cancelled'
 
 export interface TaskInfo {

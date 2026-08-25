@@ -155,6 +155,23 @@
       "cancelled": "Cancelled"
     }
   },
+  "setup": {
+    "title": "Environment Check",
+    "desc": "Running DSH instances requires Node.js and pnpm. Please prepare the environment first.",
+    "installed": "Installed {v}",
+    "missing": "Missing",
+    "installNode": "Install Node.js",
+    "nodeStep1": "Download the LTS installer from the Node.js website",
+    "nodeStep2": "Run the installer and keep the defaults (make sure \"Add to PATH\" is checked)",
+    "nodeStep3": "Click \"Re-check\" below once the installation finishes",
+    "openNodeSite": "Open nodejs.org",
+    "installPnpm": "Install pnpm",
+    "pnpmAuto": "The launcher will automatically install the latest pnpm into its own data directory on the first download; no manual step needed. To install it yourself, run:",
+    "pnpmIntro": "Run the following command in a terminal to install pnpm globally:",
+    "allReady": "Environment ready",
+    "enterApp": "Enter launcher",
+    "recheck": "Re-check"
+  },
   "common": {
     "confirm": "OK",
     "cancel": "Cancel",

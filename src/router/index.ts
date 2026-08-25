@@ -20,6 +20,7 @@ const router = createRouter({
     },
     { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue') },
     { path: '/tasks', name: 'tasks', component: () => import('@/views/Tasks.vue') },
+    { path: '/setup', name: 'setup', component: () => import('@/views/Setup.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

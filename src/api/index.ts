@@ -10,6 +10,7 @@ import type {
   LauncherSettings,
   NewInstanceInput,
   RemoteVersion,
+  RuntimeStatus,
   TaskInfo,
   TaskLog,
   TaskProgress,
@@ -267,6 +268,14 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
 
       return task.id as T
     }
+    case 'get_runtime_status': {
+      // Browser preview: assume Node + pnpm are available so the UI is usable.
+      const mockRuntime: RuntimeStatus = {
+        node: { installed: true, version: 'v22.14.0', path: null },
+        pnpm: { installed: true, version: '9.15.4', path: null },
+      }
+      return mockRuntime as T
+    }
     case 'list_tasks': {
       return [...mockTasks.values()].sort((a, b) => b.created_at - a.created_at) as T
     }
@@ -395,6 +404,8 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
 
 export const api = {
   isTauri,
+
+  getRuntimeStatus: () => call<RuntimeStatus>('get_runtime_status'),
 
   listHomes: () => call<DshHome[]>('list_homes'),
   createHome: (name: string, path: string) => call<DshHome>('create_home', { name, path }),

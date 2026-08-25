@@ -8,6 +8,7 @@ import type {
   InstanceStatus,
   LauncherSettings,
   RemoteVersion,
+  RuntimeStatus,
   TaskInfo,
 } from '@/api/types'
 
@@ -20,6 +21,7 @@ interface LauncherState {
   tasks: Record<string, TaskInfo>
   remoteVersions: RemoteVersion[]
   remoteLoading: boolean
+  runtime: RuntimeStatus | null
   loaded: boolean
 }
 
@@ -38,6 +40,7 @@ export const useLauncherStore = defineStore('launcher', {
     tasks: {},
     remoteVersions: [],
     remoteLoading: false,
+    runtime: null,
     loaded: false,
   }),
 
@@ -57,13 +60,14 @@ export const useLauncherStore = defineStore('launcher', {
 
   actions: {
     async init() {
-      const [homes, versions, instances, settings, statuses, tasks] = await Promise.all([
+      const [homes, versions, instances, settings, statuses, tasks, runtime] = await Promise.all([
         api.listHomes(),
         api.listVersions(),
         api.listInstances(),
         api.getSettings(),
         api.listInstanceStatus(),
         api.listTasks(),
+        api.getRuntimeStatus(),
       ])
       this.homes = homes
       this.versions = versions
@@ -71,6 +75,7 @@ export const useLauncherStore = defineStore('launcher', {
       this.settings = settings
       this.statusById = Object.fromEntries(statuses.map((st) => [st.id, st]))
       this.tasks = Object.fromEntries(tasks.map((t) => [t.id, t]))
+      this.runtime = runtime
       this.loaded = true
 
       await api.onInstanceStatus((st) => {
@@ -136,6 +141,10 @@ export const useLauncherStore = defineStore('launcher', {
     async refreshTasks() {
       const tasks = await api.listTasks()
       this.tasks = Object.fromEntries(tasks.map((t) => [t.id, t]))
+    },
+
+    async checkRuntime() {
+      this.runtime = await api.getRuntimeStatus()
     },
 
     async refreshRemoteVersions() {

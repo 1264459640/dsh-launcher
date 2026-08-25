@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod process;
+mod runtime;
 mod tasks;
 mod tray;
 mod windows;
@@ -76,6 +77,7 @@ pub fn run() {
             tasks::list_tasks,
             tasks::remove_task,
             tasks::cancel_task,
+            runtime::get_runtime_status,
             commands::list_instances,
             commands::create_instance,
             commands::update_instance,

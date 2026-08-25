@@ -275,9 +275,10 @@ async fn do_create_instance(
     Ok(inst.id)
 }
 
-/// Runs `npm install --loglevel=http` for the given version, streaming every
-/// output line into the task log (and as events). Returns the new version
-/// record on success.
+/// Runs `pnpm install --loglevel=http` for the given version, streaming every
+/// output line into the task log (and as events). The pnpm content store is
+/// placed under the app data dir (`.pnpm-store`) so versions are installed
+/// into the launcher's own storage. Returns the new version record on success.
 async fn install_version_streamed(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -286,16 +287,26 @@ async fn install_version_streamed(
 ) -> Result<DshVersion, String> {
     let dir = state.data_dir.join("versions").join(version);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建版本目录失败: {e}"))?;
+    let store_dir = state.data_dir.join(".pnpm-store");
 
-    let mut child = tokio::process::Command::new(crate::process::npm())
-        .args(["install", "--prefix"])
+    // Make sure a pnpm executable is available before installing: use the
+    // system one if present, otherwise bootstrap the latest pnpm into the
+    // launcher's data dir via npm.
+    let pnpm_prog = ensure_pnpm(app, state, task_id).await?;
+
+    let mut cmd = tokio::process::Command::new(&pnpm_prog);
+    cmd.args(["install", "--prefix"])
         .arg(&dir)
-        .args(["--no-audit", "--no-fund", "--loglevel=http"])
+        .arg("--store-dir")
+        .arg(&store_dir)
+        .args(["--loglevel=http"])
         .arg(format!("@deepseek-ai/dsh@{version}"))
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd
         .spawn()
-        .map_err(|e| format!("npm 启动失败: {e}"))?;
+        .map_err(|e| format!("pnpm 启动失败: {e}（请确认已安装 Node.js 与 pnpm）"))?;
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -400,6 +411,88 @@ async fn install_version_streamed(
     cfg.versions.push(record.clone());
     crate::commands::save_state(state, &cfg)?;
     Ok(record)
+}
+
+/// Returns a usable pnpm executable. Prefers the system pnpm; falls back to
+/// a pnpm bootstrapped into the launcher data dir (`tools/`). If neither
+/// exists it installs the latest pnpm there via npm and returns its path.
+async fn ensure_pnpm(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+) -> Result<std::path::PathBuf, String> {
+    // 1. System pnpm available?
+    let sys = tokio::process::Command::new(crate::process::pnpm())
+        .arg("--version")
+        .output()
+        .await;
+    if let Ok(out) = sys {
+        if out.status.success() {
+            return Ok(std::path::PathBuf::from(crate::process::pnpm()));
+        }
+    }
+
+    // 2. Local pnpm already bootstrapped?
+    let tools_dir = state.data_dir.join("tools");
+    let local = local_pnpm_path(&tools_dir);
+    if local.exists() {
+        let probe = tokio::process::Command::new(&local)
+            .arg("--version")
+            .output()
+            .await;
+        if let Ok(out) = probe {
+            if out.status.success() {
+                return Ok(local);
+            }
+        }
+    }
+
+    // 3. Bootstrap the latest pnpm inside the data dir via npm.
+    std::fs::create_dir_all(&tools_dir).map_err(|e| format!("创建工具目录失败: {e}"))?;
+    let msg = "检测到未安装 pnpm，正在安装最新版…";
+    {
+        let mut tasks = state.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.percent = 5;
+            push_log_locked(task, msg);
+        }
+    }
+    emit_progress(app, task_id, TaskState::Running, 5, None, None);
+    emit_log(app, task_id, msg);
+
+    let mut child = tokio::process::Command::new(crate::process::npm())
+        .args(["install", "--global", "--prefix"])
+        .arg(&tools_dir)
+        .args(["pnpm@latest"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("pnpm 安装启动失败: {e}"))?;
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("pnpm 安装等待失败: {e}"))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let last = err.lines().last().unwrap_or(&err).to_string();
+        return Err(format!("pnpm 安装失败: {last}"));
+    }
+
+    let local = local_pnpm_path(&tools_dir);
+    if !local.exists() {
+        return Err(format!("pnpm 安装完成但未找到可执行文件: {}", local.display()));
+    }
+    Ok(local)
+}
+
+/// Path of the pnpm executable inside a tools dir (Windows uses .cmd).
+fn local_pnpm_path(tools_dir: &std::path::Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        tools_dir.join("pnpm.cmd")
+    } else {
+        tools_dir.join("pnpm")
+    }
 }
 
 // ---------------------------------------------------------------------------

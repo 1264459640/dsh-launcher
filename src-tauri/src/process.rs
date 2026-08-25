@@ -34,6 +34,14 @@ pub fn npm() -> &'static str {
     }
 }
 
+pub fn pnpm() -> &'static str {
+    if cfg!(windows) {
+        "pnpm.cmd"
+    } else {
+        "pnpm"
+    }
+}
+
 pub fn node() -> &'static str {
     "node"
 }
