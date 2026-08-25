@@ -85,8 +85,16 @@ pub async fn fetch_available_versions() -> Result<Vec<RemoteVersion>, String> {
         .map_err(|e| format!("解析版本列表失败: {e}"))?;
 
     let time_json = run_npm_view("@deepseek-ai/dsh", "time").await?;
-    let time_map: BTreeMap<String, serde_json::Value> = serde_json::from_str(&time_json)
-        .map_err(|e| format!("解析发布时间失败: {e}"))?;
+    // npm >= 9 returns `time` as `[{ "created": ..., "<version>": "<date>" }]`
+    // (array wrapping one object); older npm returned the object directly.
+    let time_map: BTreeMap<String, serde_json::Value> = match serde_json::from_str::<BTreeMap<String, serde_json::Value>>(&time_json) {
+        Ok(map) => map,
+        Err(_) => {
+            let arr: Vec<BTreeMap<String, serde_json::Value>> = serde_json::from_str(&time_json)
+                .map_err(|e| format!("解析发布时间失败: {e}"))?;
+            arr.into_iter().next().unwrap_or_default()
+        }
+    };
 
     let mut out = Vec::with_capacity(versions.len());
     for v in versions {
