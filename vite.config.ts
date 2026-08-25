@@ -28,8 +28,9 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: {
-      // Editor/atomic-save temp directories must not be watched (EBUSY on Windows).
-      ignored: ['**/.*/**', '**/.*.tmpdir/**'],
+      // Rust build output and editor/atomic-save temp dirs must not be
+      // watched (EBUSY on Windows when cargo locks the dll).
+      ignored: ['**/src-tauri/**', '**/.*/**', '**/.*.tmpdir/**'],
     },
   },
   envPrefix: ['VITE_', 'TAURI_'],
