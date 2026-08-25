@@ -391,6 +391,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<LauncherSettings, Stri
 
 #[tauri::command]
 pub fn update_settings(
+    app: AppHandle,
     state: State<'_, AppState>,
     settings: SettingsPatch,
 ) -> Result<LauncherSettings, String> {
@@ -402,7 +403,22 @@ pub fn update_settings(
         cfg.settings.minimize_to_tray = v;
     }
     if let Some(v) = settings.autostart {
+        let prev = cfg.settings.autostart;
         cfg.settings.autostart = v;
+        if v != prev {
+            use tauri_plugin_autostart::ManagerExt;
+            let mgr = app.autolaunch();
+            let result = if v {
+                mgr.enable()
+            } else {
+                mgr.disable()
+            };
+            if let Err(e) = result {
+                // Revert the stored flag so the UI stays truthful.
+                cfg.settings.autostart = prev;
+                return Err(format!("设置开机自启失败: {e}"));
+            }
+        }
     }
     if let Some(v) = settings.last_instance_id {
         cfg.settings.last_instance_id = Some(v);

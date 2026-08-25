@@ -19,3 +19,4 @@ src-tauri/icon-source.png
 .DS_Store
 Thumbs.db
 *.local
+.idea/
