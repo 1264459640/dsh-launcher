@@ -17,13 +17,9 @@ RUN_NUMBER="${3:?run number}"
 REPO="${GITHUB_REPOSITORY:?}"
 GH_TOKEN="${GH_TOKEN:?}"
 
-# Manifest synchronization + changelog section requirement.
+# Manifest synchronization.
 node ci/check-versions.mjs
 MANIFEST_VERSION="$(node -p "require('./package.json').version")"
-grep -q "^## \[${MANIFEST_VERSION}\]" CHANGELOG.md \
-  || { echo "error: CHANGELOG.md is missing section ## [${MANIFEST_VERSION}]" >&2; exit 1; }
-grep -q "^## \[${MANIFEST_VERSION}\]" CHANGELOG.zh_CN.md \
-  || { echo "error: CHANGELOG.zh_CN.md is missing section ## [${MANIFEST_VERSION}]" >&2; exit 1; }
 
 if [[ "$REF_TYPE" == "tag" ]]; then
   TAG="$REF_NAME"
@@ -62,5 +58,4 @@ fi
 echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-echo "changelog_version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
 echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"

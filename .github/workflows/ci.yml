@@ -162,7 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Render bilingual changelog and downloads table
+      - name: Render downloads table and commit list
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -170,5 +170,4 @@ jobs:
           ./ci/update-release-notes.sh \
             "${{ needs.prepare.outputs.release_id }}" \
             "${{ needs.prepare.outputs.tag }}" \
-            "${{ needs.prepare.outputs.changelog_version }}" \
             "${{ needs.prepare.outputs.prerelease }}"

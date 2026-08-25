@@ -23,14 +23,14 @@ export function classify(name) {
 
 const PLATFORM_OF_KIND = { exe: 'Windows', msi: 'Windows', AppImage: 'Linux', deb: 'Linux', rpm: 'Linux', dmg: 'macOS' }
 const KIND_LABEL_EN = { exe: 'NSIS setup', msi: 'MSI', AppImage: 'AppImage', deb: 'DEB', rpm: 'RPM', dmg: 'DMG' }
-const KIND_LABEL_ZH = { exe: 'NSIS 安装包', msi: 'MSI 安装包', AppImage: 'AppImage', deb: 'DEB 包', rpm: 'RPM 包', dmg: 'DMG 镜像' }
 const KIND_ORDER = { exe: 0, msi: 1, AppImage: 2, deb: 3, rpm: 4, dmg: 5 }
 
 /**
- * Renders the bilingual "Downloads" table plus both changelog sections.
- * Every artifact row links directly to its release-asset download URL.
+ * Renders the English-only "Downloads" table plus the "What's Changed"
+ * commit list. Every artifact row links directly to its release-asset
+ * download URL.
  */
-export function render(tag, assets, changelogEn, changelogZh, { repo = 'REPO', version = '' } = {}) {
+export function render(tag, assets, commits, { repo = 'REPO' } = {}) {
   const sorted = [...assets]
     .filter((a) => classify(a))
     .sort((a, b) => {
@@ -41,49 +41,43 @@ export function render(tag, assets, changelogEn, changelogZh, { repo = 'REPO', v
     })
 
   const link = (name) => `https://github.com/${repo}/releases/download/${tag}/${name}`
-  const rowsEn = sorted.map((name) => {
+  const rows = sorted.map((name) => {
     const c = classify(name)
     return `| ${PLATFORM_OF_KIND[c.kind]} | ${c.arch} | [${name}](${link(name)}) (${KIND_LABEL_EN[c.kind]}) |`
   })
-  const rowsZh = sorted.map((name) => {
-    const c = classify(name)
-    return `| ${PLATFORM_OF_KIND[c.kind]} | ${c.arch} | [${name}](${link(name)})（${KIND_LABEL_ZH[c.kind]}）|`
-  })
+
+  const commitLines = (commits ?? [])
+    .map((c) => `* ${c}`)
+    .join('\n')
 
   return `## Downloads
 
-### English
-
 | Platform | Architecture | File |
 | --- | --- | --- |
-${rowsEn.join('\n')}
-
-### 简体中文
-
-| 平台 | 架构 | 文件 |
-| --- | --- | --- |
-${rowsZh.join('\n')}
+${rows.join('\n')}
 
 ---
 
-${changelogEn.trim()}
+## What's Changed
 
----
-
-${changelogZh.trim()}
+${commitLines}
 `
 }
 
-// CLI mode: node ci/release-notes-render.mjs <tag> <assets-json> <changelog-en> <changelog-zh>
+// CLI mode: node ci/release-notes-render.mjs <tag> <assets-json> <commits-file>
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [, , tag, assetsJson, en, zh] = process.argv
+  const [, , tag, assetsJson, commitsFile] = process.argv
   const assets = JSON.parse(assetsJson)
+  const commits = commitsFile
+    ? readFileSync(commitsFile, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean)
+    : []
   const repo = process.env.GITHUB_REPOSITORY ?? 'REPO'
   const unknown = assets.filter((a) => !classify(a))
   if (unknown.length > 0) {
     console.error(`release-note classifier rejected assets: ${unknown.join(', ')}`)
     process.exit(1)
   }
-  process.stdout.write(render(tag, assets, en, zh, { repo }))
+  process.stdout.write(render(tag, assets, commits, { repo }))
 }
