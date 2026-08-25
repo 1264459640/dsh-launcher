@@ -394,19 +394,21 @@ async fn ensure_web_profile_template(
     let msg = format!("正在初始化 web profile（端口 {port}）…");
     push_task_log(app, state, task_id, &msg).await;
 
-    let mut child = tokio::process::Command::new(crate::process::node())
-        .arg(&bin)
-        .arg("--profile")
-        .arg("web")
-        .arg("--host")
-        .arg("127.0.0.1")
-        .arg("--port")
-        .arg(port.to_string())
-        .env("DSH_HOME", home_path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("启动 DSH 生成 profile 失败: {e}"))?;
+    let mut child = crate::process::hide_console(
+        tokio::process::Command::new(crate::process::node())
+            .arg(&bin)
+            .arg("--profile")
+            .arg("web")
+            .arg("--host")
+            .arg("127.0.0.1")
+            .arg("--port")
+            .arg(port.to_string())
+            .env("DSH_HOME", home_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .spawn()
+    .map_err(|e| format!("启动 DSH 生成 profile 失败: {e}"))?;
 
     // Wait for the web URL to appear (profile has been created), then stop it.
     let mut timer = tokio::time::interval(std::time::Duration::from_millis(300));
@@ -526,6 +528,7 @@ async fn install_version_streamed(
     let pnpm_prog = ensure_pnpm(app, state, task_id).await?;
 
     let mut cmd = tokio::process::Command::new(&pnpm_prog);
+    crate::process::hide_console(&mut cmd);
     cmd.args(["install", "--prefix"])
         .arg(&dir)
         .arg("--store-dir")
@@ -692,14 +695,16 @@ async fn ensure_pnpm(
     emit_progress(app, task_id, TaskState::Running, 5, None, None);
     emit_log(app, task_id, msg);
 
-    let child = tokio::process::Command::new(crate::process::npm())
-        .args(["install", "--global", "--prefix"])
-        .arg(&tools_dir)
-        .args(["pnpm@latest"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("pnpm 安装启动失败: {e}"))?;
+    let child = crate::process::hide_console(
+        tokio::process::Command::new(crate::process::npm())
+            .args(["install", "--global", "--prefix"])
+            .arg(&tools_dir)
+            .args(["pnpm@latest"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .spawn()
+    .map_err(|e| format!("pnpm 安装启动失败: {e}"))?;
     let output = child
         .wait_with_output()
         .await

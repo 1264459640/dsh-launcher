@@ -46,6 +46,17 @@ pub fn node() -> &'static str {
     "node"
 }
 
+/// Hides the console window on Windows (CREATE_NO_WINDOW) so spawning
+/// npm.cmd / pnpm.cmd / node.exe never flashes a terminal next to the
+/// launcher GUI. No-op on other platforms.
+pub fn hide_console(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 pub fn version_bin(version_dir: &std::path::Path) -> PathBuf {
     version_dir
         .join("node_modules")
@@ -124,6 +135,7 @@ pub async fn start_instance_process(
     }
 
     let mut cmd = Command::new(node());
+    hide_console(&mut cmd);
     cmd.arg(&bin).arg("--profile").arg(profile);
     // Only the web app understands --host/--port; other profiles are managed
     // purely as processes (no URL/webview).

@@ -136,8 +136,9 @@ pub async fn fetch_available_versions() -> Result<Vec<RemoteVersion>, String> {
 }
 
 async fn run_npm_view(pkg: &str, field: &str) -> Result<String, String> {
-    let output = tokio::process::Command::new(process::npm())
-        .args(["view", pkg, field, "--json"])
+    let mut cmd = tokio::process::Command::new(process::npm());
+    cmd.args(["view", pkg, field, "--json"]);
+    let output = crate::process::hide_console(&mut cmd)
         .output()
         .await
         .map_err(|e| format!("npm 执行失败: {e}"))?;
