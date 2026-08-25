@@ -39,11 +39,32 @@ export interface InstanceStatus {
   exit_code: number | null
 }
 
-export interface InstallProgress {
+export type TaskState = 'running' | 'done' | 'error' | 'cancelled'
+
+export interface TaskInfo {
+  id: string
+  kind: string
+  label: string
   version: string
+  state: TaskState
   percent: number
-  stage: 'downloading' | 'installing' | 'done' | 'error'
+  created_at: number
   message: string | null
+  instance_id: string | null
+  logs: string[]
+}
+
+export interface TaskProgress {
+  id: string
+  state: TaskState
+  percent: number
+  message: string | null
+  instance_id: string | null
+}
+
+export interface TaskLog {
+  id: string
+  line: string
 }
 
 export interface RemoteVersion {

@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod process;
+mod tasks;
 mod tray;
 mod windows;
 
@@ -13,6 +14,7 @@ pub struct AppState {
     pub data_dir: std::path::PathBuf,
     pub config: StdMutex<config::Config>,
     pub running: tokio::sync::Mutex<HashMap<String, process::RunningInstance>>,
+    pub tasks: tokio::sync::Mutex<HashMap<String, tasks::TaskInfo>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -33,6 +35,7 @@ pub fn run() {
                 data_dir: data_dir.clone(),
                 config: StdMutex::new(cfg),
                 running: tokio::sync::Mutex::new(HashMap::new()),
+                tasks: tokio::sync::Mutex::new(HashMap::new()),
             });
 
             // System tray with dynamic menu.
@@ -68,8 +71,11 @@ pub fn run() {
             commands::remove_home,
             commands::list_versions,
             commands::fetch_available_versions,
-            commands::install_version,
             commands::remove_version,
+            tasks::start_create_instance_task,
+            tasks::list_tasks,
+            tasks::remove_task,
+            tasks::cancel_task,
             commands::list_instances,
             commands::create_instance,
             commands::update_instance,

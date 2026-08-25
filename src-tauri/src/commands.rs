@@ -1,12 +1,10 @@
 use crate::config::{
-    new_id, sanitize_name, DshHome, DshInstance, DshVersion, InstallProgress, LauncherSettings,
+    new_id, sanitize_name, DshHome, DshInstance, DshVersion, LauncherSettings,
     NewInstanceInput, RemoteVersion, SettingsPatch,
 };
 use crate::{process, AppState};
 use std::collections::BTreeMap;
-use tauri::{AppHandle, Emitter, State};
-
-pub const INSTALL_PROGRESS_EVENT: &str = "version://install-progress";
+use tauri::{AppHandle, State};
 
 // ---------------------------------------------------------------------------
 // DSH_HOME
@@ -22,6 +20,15 @@ pub fn create_home(
     state: State<'_, AppState>,
     name: String,
     path: String,
+) -> Result<DshHome, String> {
+    create_home_record(&state, &name, &path)
+}
+
+/// Shared helper: validates + creates a DSH_HOME record.
+pub(crate) fn create_home_record(
+    state: &State<'_, AppState>,
+    name: &str,
+    path: &str,
 ) -> Result<DshHome, String> {
     let name = name.trim();
     let path = path.trim();
@@ -40,7 +47,7 @@ pub fn create_home(
     };
     let mut cfg = state.config.lock().unwrap();
     cfg.homes.push(home.clone());
-    save(&state, &cfg)?;
+    save_state(state, &cfg)?;
     Ok(home)
 }
 
@@ -64,7 +71,7 @@ pub fn remove_home(state: State<'_, AppState>, id: String) -> Result<(), String>
         return Err("该 DSH_HOME 仍被实例引用，无法删除".to_string());
     }
     cfg.homes.retain(|h| h.id != id);
-    save(&state, &cfg)
+    save_state(&state, &cfg)
 }
 
 // ---------------------------------------------------------------------------
@@ -125,83 +132,6 @@ async fn run_npm_view(pkg: &str, field: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Installs a DSH version into the launcher data dir via
-/// `npm install --prefix <dir> @deepseek-ai/dsh@<version>`. Streams progress
-/// events; resolves once the install finishes (success or failure).
-#[tauri::command]
-pub async fn install_version(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    version: String,
-) -> Result<DshVersion, String> {
-    let version = version.trim().to_string();
-    if version.is_empty() {
-        return Err("版本号不能为空".to_string());
-    }
-    {
-        let cfg = state.config.lock().unwrap();
-        if cfg.versions.iter().any(|v| v.version == version) {
-            return Err(format!("版本 {version} 已安装"));
-        }
-    }
-
-    let dir = state.data_dir.join("versions").join(&version);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建版本目录失败: {e}"))?;
-
-    emit_progress(&app, &version, 5, "downloading", None);
-
-    let mut child = tokio::process::Command::new(process::npm())
-        .args(["install", "--prefix"])
-        .arg(&dir)
-        .args(["--no-audit", "--no-fund"])
-        .arg(format!("@deepseek-ai/dsh@{version}"))
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("npm 启动失败: {e}"))?;
-
-    // Progress: bump percent as stderr lines arrive (npm writes progress there).
-    if let Some(err) = child.stderr.take() {
-        let app2 = app.clone();
-        let ver = version.clone();
-        tauri::async_runtime::spawn(async move {
-            use tokio::io::{AsyncBufReadExt, BufReader};
-            let mut lines = BufReader::new(err).lines();
-            let mut n: u32 = 0;
-            while let Ok(Some(_)) = lines.next_line().await {
-                n += 1;
-                if n % 40 == 0 {
-                    let percent = (10 + (n / 40) * 5).min(90);
-                    emit_progress(&app2, &ver, percent, "installing", None);
-                }
-            }
-        });
-    }
-
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("npm 等待失败: {e}"))?;
-
-    if !output.status.success() {
-        let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        emit_progress(&app, &version, 0, "error", Some(msg.clone()));
-        return Err(format!("安装失败: {}", msg.lines().last().unwrap_or(&msg)));
-    }
-
-    let record = DshVersion {
-        id: new_id("v"),
-        version: version.clone(),
-        dir,
-    };
-    let mut cfg = state.config.lock().unwrap();
-    cfg.versions.push(record.clone());
-    save(&state, &cfg)?;
-
-    emit_progress(&app, &version, 100, "done", None);
-    Ok(record)
-}
-
 #[tauri::command]
 pub fn remove_version(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
@@ -212,7 +142,7 @@ pub fn remove_version(state: State<'_, AppState>, id: String) -> Result<(), Stri
         return Err("版本不存在".to_string());
     };
     cfg.versions.retain(|v| v.id != id);
-    save(&state, &cfg)?;
+    save_state(&state, &cfg)?;
     // Best-effort removal of the install directory.
     let _ = std::fs::remove_dir_all(&version.dir);
     Ok(())
@@ -256,7 +186,7 @@ pub fn create_instance(
         last_profile: None,
     };
     cfg.instances.push(inst.clone());
-    save(&state, &cfg)?;
+    save_state(&state, &cfg)?;
     Ok(inst)
 }
 
@@ -285,7 +215,7 @@ pub fn update_instance(
         return Err("实例不存在".to_string());
     };
     cfg.instances[pos] = updated.clone();
-    save(&state, &cfg)?;
+    save_state(&state, &cfg)?;
     Ok(updated)
 }
 
@@ -304,7 +234,7 @@ pub async fn delete_instance(
     if cfg.settings.last_instance_id.as_deref() == Some(id.as_str()) {
         cfg.settings.last_instance_id = None;
     }
-    save(&state, &cfg)
+    save_state(&state, &cfg)
 }
 
 #[tauri::command]
@@ -349,7 +279,7 @@ pub async fn start_instance(
     if let Some(inst) = cfg.instances.iter_mut().find(|i| i.id == id) {
         inst.last_profile = Some(profile);
     }
-    save(&state, &cfg)
+    save_state(&state, &cfg)
 }
 
 #[tauri::command]
@@ -432,24 +362,12 @@ pub fn update_settings(
         cfg.settings.last_instance_id = Some(v);
     }
     let out = cfg.settings.clone();
-    save(&state, &cfg)?;
+    save_state(&state, &cfg)?;
     Ok(out)
 }
 
 // ---------------------------------------------------------------------------
 
-fn save(state: &State<'_, AppState>, cfg: &crate::config::Config) -> Result<(), String> {
+pub(crate) fn save_state(state: &State<'_, AppState>, cfg: &crate::config::Config) -> Result<(), String> {
     crate::config::save_config(&state.config_path, cfg)
-}
-
-fn emit_progress(app: &AppHandle, version: &str, percent: u32, stage: &str, message: Option<String>) {
-    let _ = app.emit(
-        INSTALL_PROGRESS_EVENT,
-        InstallProgress {
-            version: version.to_string(),
-            percent,
-            stage: stage.to_string(),
-            message,
-        },
-    );
 }

@@ -6,11 +6,13 @@ import type {
   DshHome,
   DshInstance,
   DshVersion,
-  InstallProgress,
   InstanceStatus,
   LauncherSettings,
   NewInstanceInput,
   RemoteVersion,
+  TaskInfo,
+  TaskLog,
+  TaskProgress,
 } from './types'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -92,13 +94,24 @@ function uuid(): string {
 // Simple event emitter used by the mock to mimic Tauri events.
 type Listener<T> = (payload: T) => void
 const statusListeners = new Set<Listener<InstanceStatus>>()
-const progressListeners = new Set<Listener<InstallProgress>>()
+const taskProgressListeners = new Set<Listener<TaskProgress>>()
+const taskLogListeners = new Set<Listener<TaskLog>>()
 
 function emitStatus(s: InstanceStatus) {
   statusListeners.forEach((fn) => fn(s))
 }
-function emitProgress(p: InstallProgress) {
-  progressListeners.forEach((fn) => fn(p))
+function emitTaskProgress(p: TaskProgress) {
+  taskProgressListeners.forEach((fn) => fn(p))
+}
+function emitTaskLog(l: TaskLog) {
+  taskLogListeners.forEach((fn) => fn(l))
+}
+
+// Mock task storage (runtime only, like the real backend).
+const mockTasks = new Map<string, TaskInfo>()
+
+function mockNewId(prefix: string): string {
+  return `${prefix}-${uuid()}`
 }
 
 // ---------------------------------------------------------------------------
@@ -152,30 +165,119 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         { version: '0.1.0-rc.4', released_at: '2026-07-01T10:00:00Z' },
         { version: '0.1.0-rc.3', released_at: '2026-06-15T08:00:00Z' },
       ] as T
-    case 'install_version': {
-      const version = String(args?.version)
-      if (db.versions.some((v) => v.version === version)) fail(`版本 ${version} 已安装`)
-      const v: DshVersion = {
-        id: `v-${uuid()}`,
-        version,
-        dir: `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\versions\\${version}`,
+    case 'start_create_instance_task': {
+      const name = String(args?.name ?? '').trim()
+      const version = String(args?.version ?? '').trim()
+      const dedicated = Boolean(args?.dedicated)
+      const homeIdArg = args?.home_id as string | null
+      if (!name) fail('实例名称不能为空')
+      if (!version) fail('版本号不能为空')
+      if (db.instances.some((i) => i.name === name)) fail('同名实例已存在')
+
+      let homeId = homeIdArg
+      if (dedicated) {
+        const safe = name.replace(/[^\w一-龥.-]+/g, '_')
+        const home: DshHome = {
+          id: mockNewId('h'),
+          name,
+          path: `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\homes\\${safe}`,
+        }
+        db.homes.push(home)
+        homeId = home.id
       }
-      // Simulate progress; the command resolves once the install completes.
-      return new Promise((resolve) => {
-        let pct = 0
-        emitProgress({ version, percent: 0, stage: 'downloading', message: null })
-        const timer = setInterval(() => {
-          pct += 20
-          const done = pct >= 100
-          emitProgress({ version, percent: Math.min(pct, 100), stage: done ? 'done' : 'installing', message: null })
-          if (done) {
-            clearInterval(timer)
-            db.versions.push(v)
-            saveDb(db)
-            resolve(v)
+      if (!homeId || !db.homes.some((h) => h.id === homeId)) fail('请选择 DSH_HOME')
+
+      const task: TaskInfo = {
+        id: mockNewId('t'),
+        kind: 'create-instance',
+        label: `下载 DSH ${version} 并创建实例「${name}」`,
+        version,
+        state: 'running',
+        percent: 0,
+        created_at: Date.now(),
+        message: null,
+        instance_id: null,
+        logs: [],
+      }
+      mockTasks.set(task.id, task)
+      emitTaskProgress({ id: task.id, state: 'running', percent: 0, message: null, instance_id: null })
+
+      // Simulate npm --loglevel=http download + install + instance creation.
+      const fakeLogs = [
+        `npm http fetch GET 200 https://registry.npmjs.org/@deepseek-ai%2fdsh 120ms`,
+        `npm http fetch GET 200 https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-${version}.tgz 480ms`,
+        `npm info ok`,
+        `added 213 packages in 2s`,
+      ]
+      let step = 0
+      const timer = setInterval(() => {
+        const t = mockTasks.get(task.id)
+        if (!t || t.state !== 'running') {
+          clearInterval(timer)
+          return
+        }
+        if (step < fakeLogs.length) {
+          const line = fakeLogs[step]
+          t.logs.push(line)
+          t.percent = Math.min(95, t.percent + 20)
+          emitTaskLog({ id: task.id, line })
+          emitTaskProgress({ id: task.id, state: 'running', percent: t.percent, message: null, instance_id: null })
+          step += 1
+          return
+        }
+        clearInterval(timer)
+        // Install version record if missing.
+        const cur = loadDb()
+        let ver = cur.versions.find((v) => v.version === version)
+        if (!ver) {
+          ver = {
+            id: mockNewId('v'),
+            version,
+            dir: `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\versions\\${version}`,
           }
-        }, 300)
-      }) as T
+          cur.versions.push(ver)
+        }
+        const inst: DshInstance = {
+          id: mockNewId('i'),
+          name,
+          version_id: ver.id,
+          home_id: homeId!,
+          env_overrides: {},
+          default_profile: null,
+          last_profile: null,
+        }
+        cur.instances.push(inst)
+        saveDb(cur)
+        const doneTask = mockTasks.get(task.id)
+        if (doneTask) {
+          doneTask.state = 'done'
+          doneTask.percent = 100
+          doneTask.instance_id = inst.id
+        }
+        emitTaskProgress({ id: task.id, state: 'done', percent: 100, message: null, instance_id: inst.id })
+      }, 600)
+
+      return task.id as T
+    }
+    case 'list_tasks': {
+      return [...mockTasks.values()].sort((a, b) => b.created_at - a.created_at) as T
+    }
+    case 'remove_task': {
+      const id = String(args?.id)
+      const t = mockTasks.get(id)
+      if (!t) fail('任务不存在')
+      if (t.state === 'running') fail('任务仍在运行，请先取消')
+      mockTasks.delete(id)
+      return undefined as T
+    }
+    case 'cancel_task': {
+      const id = String(args?.id)
+      const t = mockTasks.get(id)
+      if (!t) fail('任务不存在')
+      t.state = 'cancelled'
+      t.message = '已取消'
+      emitTaskProgress({ id, state: 'cancelled', percent: t.percent, message: '已取消', instance_id: null })
+      return undefined as T
     }
     case 'remove_version': {
       const id = String(args?.id)
@@ -293,8 +395,13 @@ export const api = {
 
   listVersions: () => call<DshVersion[]>('list_versions'),
   fetchAvailableVersions: () => call<RemoteVersion[]>('fetch_available_versions'),
-  installVersion: (version: string) => call<DshVersion>('install_version', { version }),
   removeVersion: (id: string) => call<void>('remove_version', { id }),
+
+  startCreateInstanceTask: (name: string, version: string, homeId: string | null, dedicated: boolean) =>
+    call<string>('start_create_instance_task', { name, version, home_id: homeId, dedicated }),
+  listTasks: () => call<TaskInfo[]>('list_tasks'),
+  removeTask: (id: string) => call<void>('remove_task', { id }),
+  cancelTask: (id: string) => call<void>('cancel_task', { id }),
 
   listInstances: () => call<DshInstance[]>('list_instances'),
   createInstance: (input: NewInstanceInput) => call<DshInstance>('create_instance', { input }),
@@ -321,13 +428,23 @@ export const api = {
     return () => statusListeners.delete(cb)
   },
 
-  async onInstallProgress(cb: Listener<InstallProgress>): Promise<() => void> {
+  async onTaskProgress(cb: Listener<TaskProgress>): Promise<() => void> {
     if (isTauri) {
       const { listen } = await import('@tauri-apps/api/event')
-      const un = await listen<InstallProgress>('version://install-progress', (e) => cb(e.payload))
+      const un = await listen<TaskProgress>('task://progress', (e) => cb(e.payload))
       return un
     }
-    progressListeners.add(cb)
-    return () => progressListeners.delete(cb)
+    taskProgressListeners.add(cb)
+    return () => taskProgressListeners.delete(cb)
+  },
+
+  async onTaskLog(cb: Listener<TaskLog>): Promise<() => void> {
+    if (isTauri) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const un = await listen<TaskLog>('task://log', (e) => cb(e.payload))
+      return un
+    }
+    taskLogListeners.add(cb)
+    return () => taskLogListeners.delete(cb)
   },
 }

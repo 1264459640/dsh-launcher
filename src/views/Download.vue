@@ -2,10 +2,12 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { useLauncherStore } from '@/stores/launcher'
 
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
+const store = useLauncherStore()
 
 const selectedKeys = computed(() => {
   const name = route.name as string
@@ -13,8 +15,14 @@ const selectedKeys = computed(() => {
   return ['create']
 })
 
+const onCreatePage = computed(() => selectedKeys.value[0] === 'create')
+
 function onMenuSelect(key: string) {
   router.push({ name: key === 'plugins' ? 'download-plugins' : 'download-create' })
+}
+
+function onRefreshVersions() {
+  store.refreshRemoteVersions()
 }
 </script>
 
@@ -22,7 +30,21 @@ function onMenuSelect(key: string) {
   <div class="download-page">
     <aside class="download-sidebar">
       <a-menu :selected-keys="selectedKeys" @menu-item-click="onMenuSelect">
-        <a-menu-item key="create">{{ t('download.createInstance') }}</a-menu-item>
+        <a-menu-item key="create">
+          <span class="menu-line">
+            {{ t('download.createInstance') }}
+            <a-button
+              v-if="onCreatePage"
+              type="text"
+              size="mini"
+              class="refresh-btn"
+              :loading="store.remoteLoading"
+              @click.stop="onRefreshVersions"
+            >
+              ⟳
+            </a-button>
+          </span>
+        </a-menu-item>
         <a-menu-item key="plugins">{{ t('download.plugins') }}</a-menu-item>
       </a-menu>
     </aside>
@@ -46,6 +68,24 @@ function onMenuSelect(key: string) {
 
   :deep(.arco-menu) {
     height: 100%;
+  }
+}
+
+.menu-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.refresh-btn {
+  margin-left: auto;
+  padding: 0 4px;
+  font-size: 14px;
+  color: var(--color-text-3);
+
+  &:hover {
+    color: rgb(var(--primary-6));
   }
 }
 

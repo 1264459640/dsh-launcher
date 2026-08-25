@@ -130,14 +130,6 @@ pub struct InstanceStatus {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InstallProgress {
-    pub version: String,
-    pub percent: u32,
-    pub stage: String, // downloading | installing | done | error
-    pub message: Option<String>,
-}
-
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------

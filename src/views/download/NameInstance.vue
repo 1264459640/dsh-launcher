@@ -1,11 +1,10 @@
-<script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+﻿<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
-import type { InstallProgress } from '@/api/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,8 +30,6 @@ const DEDICATED = '__dedicated__'
 const homeId = ref<string | undefined>(DEDICATED)
 const dedicatedPath = ref('')
 const busy = ref(false)
-const installing = ref(false)
-const progress = ref(0)
 
 const dedicated = computed(() => homeId.value === DEDICATED)
 
@@ -48,17 +45,6 @@ watch(instanceName, async (v) => {
   }
 })
 
-let unlisten: (() => void) | null = null
-
-onMounted(async () => {
-  unlisten = await api.onInstallProgress((p: InstallProgress) => {
-    if (p.version !== version.value) return
-    progress.value = p.percent
-  })
-})
-
-onBeforeUnmount(() => unlisten?.())
-
 const canConfirm = computed(
   () =>
     !busy.value &&
@@ -71,39 +57,15 @@ async function onConfirm() {
   if (!canConfirm.value) return
   busy.value = true
   try {
-    // 0. Resolve the DSH_HOME: create a dedicated one if requested.
-    let resolvedHomeId = homeId.value!
-    if (dedicated.value) {
-      const home = await api.createHome(instanceName.value.trim(), dedicatedPath.value)
-      resolvedHomeId = home.id
-      await store.refreshHomes()
-    }
-
-    // 1. Install the DSH version if it is not installed yet.
-    if (!installedVersion.value) {
-      installing.value = true
-      progress.value = 0
-      await api.installVersion(version.value)
-      await store.refreshVersions()
-      installing.value = false
-    }
-    const ver = store.versions.find((v) => v.version === version.value)
-    if (!ver) throw new Error(`version ${version.value} not installed`)
-
-    // 2. Create the instance bound to that version.
-    const inst = await api.createInstance({
-      name: instanceName.value.trim(),
-      version_id: ver.id,
-      home_id: resolvedHomeId,
-      env_overrides: {},
-      default_profile: null,
-    })
-    await Promise.all([store.refreshInstances(), api.updateSettings({ last_instance_id: inst.id })])
-    store.settings.last_instance_id = inst.id
-    Message.success(t('download.created', { name: inst.name }))
-    router.push({ name: 'home' })
+    await api.startCreateInstanceTask(
+      instanceName.value.trim(),
+      version.value,
+      dedicated.value ? null : homeId.value!,
+      dedicated.value,
+    )
+    Message.success(t('download.taskAdded'))
+    router.push({ name: 'tasks' })
   } catch (e) {
-    installing.value = false
     Message.error(String(e))
   } finally {
     busy.value = false
@@ -151,7 +113,6 @@ async function onConfirm() {
       <a-alert v-else type="info" class="confirm-hint">
         {{ t('download.willInstall', { version }) }}
       </a-alert>
-      <a-progress v-if="installing" :percent="progress / 100" class="confirm-progress" />
       <a-button
         type="primary"
         size="large"
@@ -160,7 +121,7 @@ async function onConfirm() {
         :loading="busy"
         @click="onConfirm"
       >
-        {{ installing ? t('download.downloading') : installedVersion ? t('download.createOnly') : t('download.startDownload') }}
+        {{ installedVersion ? t('download.createOnly') : t('download.startDownload') }}
       </a-button>
     </div>
   </div>
@@ -220,11 +181,6 @@ async function onConfirm() {
 .dedicated-hint {
   margin-top: 12px;
   max-width: 480px;
-}
-
-.confirm-progress {
-  max-width: 520px;
-  width: 100%;
 }
 
 .confirm-button {

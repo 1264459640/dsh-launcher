@@ -58,6 +58,14 @@ function onMenuSelect(key: string) {
     <a-layout-content>
       <router-view />
     </a-layout-content>
+
+    <!-- Floating task manager entry (bottom-right) -->
+    <div class="task-fab" @click="router.push({ name: 'tasks' })">
+      <a-badge :count="store.runningTaskCount" :dot="store.runningTaskCount > 0">
+        <span class="task-fab-icon">⏱</span>
+      </a-badge>
+      <span class="task-fab-text">{{ t('tasks.fab') }}</span>
+    </div>
   </a-layout>
 </template>
 
@@ -99,5 +107,38 @@ function onMenuSelect(key: string) {
   :deep(.arco-menu-inner) {
     border-bottom: none;
   }
+}
+
+.task-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border-2);
+  border-radius: 24px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 12%);
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.15s, box-shadow 0.15s;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgb(22 93 255 / 20%);
+  }
+}
+
+.task-fab-icon {
+  font-size: 18px;
+}
+
+.task-fab-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-1);
 }
 </style>

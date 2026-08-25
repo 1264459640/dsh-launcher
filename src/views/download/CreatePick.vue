@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
@@ -11,21 +11,12 @@ const router = useRouter()
 const { t } = useI18n()
 const store = useLauncherStore()
 
-const remote = ref<RemoteVersion[]>([])
-const loading = ref(false)
+const remote = computed(() => store.remoteVersions)
+const loading = computed(() => store.remoteLoading)
 
-async function fetchVersions() {
-  loading.value = true
-  try {
-    remote.value = await api.fetchAvailableVersions()
-  } catch (e) {
-    Message.error(t('download.fetchFailed', { msg: String(e) }))
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(fetchVersions)
+onMounted(() => {
+  store.refreshRemoteVersions()
+})
 
 const collator = new Intl.Collator('en', { numeric: true })
 
@@ -77,71 +68,78 @@ async function onRemove(id: string, version: string) {
 
 <template>
   <div class="create-pick" v-loading="loading">
-    <!-- Latest versions -->
-    <div v-if="latest.length" class="dl-card">
+    <!-- Latest versions (always rendered; empty state when no data) -->
+    <div class="dl-card">
       <div class="dl-card-title">
         <h3>{{ t('download.latest') }}</h3>
-        <a-button size="small" type="text" @click="fetchVersions">{{ t('common.refresh') }}</a-button>
+        <a-button size="small" type="text" :loading="loading" @click="store.refreshRemoteVersions()">
+          {{ t('common.refresh') }}
+        </a-button>
       </div>
-      <div
-        v-for="row in latest"
-        :key="row.v.version"
-        class="version-row"
-        @click="pick(row.v.version)"
-      >
-        <span class="version-icon" :class="{ pre: isPrerelease(row.v.version) }">◆</span>
-        <div class="version-meta">
-          <div class="version-name">
-            {{ row.v.version }}
-            <a-tag v-if="installedSet.has(row.v.version)" size="small" color="green">
-              {{ t('download.installedTag') }}
-            </a-tag>
+      <template v-if="latest.length">
+        <div
+          v-for="row in latest"
+          :key="row.v.version"
+          class="version-row"
+          @click="pick(row.v.version)"
+        >
+          <span class="version-icon" :class="{ pre: isPrerelease(row.v.version) }">◆</span>
+          <div class="version-meta">
+            <div class="version-name">
+              {{ row.v.version }}
+              <a-tag v-if="installedSet.has(row.v.version)" size="small" color="green">
+                {{ t('download.installedTag') }}
+              </a-tag>
+            </div>
+            <div class="version-sub">
+              {{ row.label }}<template v-if="row.v.released_at">，{{ t('download.releasedAt', { date: formatDate(row.v.released_at) }) }}</template>
+            </div>
           </div>
-          <div class="version-sub">
-            {{ row.label }}<template v-if="row.v.released_at">，{{ t('download.releasedAt', { date: formatDate(row.v.released_at) }) }}</template>
-          </div>
+          <span class="version-arrow">›</span>
         </div>
-        <span class="version-arrow">›</span>
-      </div>
+      </template>
+      <div v-else class="card-empty">{{ loading ? t('common.loading') : t('download.noData') }}</div>
     </div>
 
     <!-- Grouped version lists -->
     <a-collapse :default-active-key="['stable', 'prerelease']" class="version-groups">
-      <a-collapse-item v-if="stable.length" key="stable" :header="t('download.stable')">
-        <div v-for="v in stable" :key="v.version" class="version-row" @click="pick(v.version)">
-          <span class="version-icon">◆</span>
-          <div class="version-meta">
-            <div class="version-name">
-              {{ v.version }}
-              <a-tag v-if="installedSet.has(v.version)" size="small" color="green">
-                {{ t('download.installedTag') }}
-              </a-tag>
+      <a-collapse-item key="stable" :header="t('download.stable')">
+        <template v-if="stable.length">
+          <div v-for="v in stable" :key="v.version" class="version-row" @click="pick(v.version)">
+            <span class="version-icon">◆</span>
+            <div class="version-meta">
+              <div class="version-name">
+                {{ v.version }}
+                <a-tag v-if="installedSet.has(v.version)" size="small" color="green">
+                  {{ t('download.installedTag') }}
+                </a-tag>
+              </div>
+              <div class="version-sub">{{ formatDate(v.released_at) }}</div>
             </div>
-            <div class="version-sub">{{ formatDate(v.released_at) }}</div>
+            <span class="version-arrow">›</span>
           </div>
-          <span class="version-arrow">›</span>
-        </div>
+        </template>
+        <div v-else class="card-empty">{{ t('download.noData') }}</div>
       </a-collapse-item>
-      <a-collapse-item v-if="prerelease.length" key="prerelease" :header="t('download.prerelease')">
-        <div v-for="v in prerelease" :key="v.version" class="version-row" @click="pick(v.version)">
-          <span class="version-icon pre">◆</span>
-          <div class="version-meta">
-            <div class="version-name">
-              {{ v.version }}
-              <a-tag v-if="installedSet.has(v.version)" size="small" color="green">
-                {{ t('download.installedTag') }}
-              </a-tag>
+      <a-collapse-item key="prerelease" :header="t('download.prerelease')">
+        <template v-if="prerelease.length">
+          <div v-for="v in prerelease" :key="v.version" class="version-row" @click="pick(v.version)">
+            <span class="version-icon pre">◆</span>
+            <div class="version-meta">
+              <div class="version-name">
+                {{ v.version }}
+                <a-tag v-if="installedSet.has(v.version)" size="small" color="green">
+                  {{ t('download.installedTag') }}
+                </a-tag>
+              </div>
+              <div class="version-sub">{{ formatDate(v.released_at) }}</div>
             </div>
-            <div class="version-sub">{{ formatDate(v.released_at) }}</div>
+            <span class="version-arrow">›</span>
           </div>
-          <span class="version-arrow">›</span>
-        </div>
+        </template>
+        <div v-else class="card-empty">{{ t('download.noData') }}</div>
       </a-collapse-item>
     </a-collapse>
-
-    <a-empty v-if="!loading && remote.length === 0" :description="t('download.emptyAvailable')">
-      <a-button @click="fetchVersions">{{ t('common.refresh') }}</a-button>
-    </a-empty>
 
     <!-- Installed versions -->
     <div class="dl-card installed-card">
@@ -260,5 +258,11 @@ async function onRemove(id: string, version: string) {
   font-size: 12px;
   margin-right: 8px;
   white-space: nowrap;
+}
+
+.card-empty {
+  padding: 18px 12px;
+  color: var(--color-text-3);
+  font-size: 13px;
 }
 </style>

@@ -63,8 +63,6 @@
     "installedTag": "已安装",
     "installedTitle": "已安装版本",
     "emptyInstalled": "尚未安装任何 DSH 版本",
-    "emptyAvailable": "未能获取版本列表",
-    "fetchFailed": "获取版本列表失败：{msg}",
     "back": "返回",
     "instanceName": "实例名称",
     "chooseHome": "选择 DSH_HOME",
@@ -76,8 +74,9 @@
     "alreadyInstalled": "该版本已安装，将直接创建实例",
     "startDownload": "开始下载",
     "createOnly": "创建实例",
-    "downloading": "下载安装中…",
     "created": "实例「{name}」已创建",
+    "taskAdded": "已添加后台下载任务",
+    "noData": "暂无数据",
     "deleteVersion": "删除",
     "confirmDeleteVersion": "确定删除版本 {version}？其安装目录将被移除。",
     "versionDeleted": "版本 {version} 已删除",
@@ -140,12 +139,28 @@
     "saved": "实例已保存",
     "notFound": "实例不存在"
   },
+  "tasks": {
+    "title": "任务管理",
+    "fab": "任务",
+    "empty": "暂无任务",
+    "noLogs": "暂无日志",
+    "cancel": "取消",
+    "remove": "移除",
+    "createdInstance": "已创建实例「{name}」",
+    "state": {
+      "running": "进行中",
+      "done": "已完成",
+      "error": "失败",
+      "cancelled": "已取消"
+    }
+  },
   "common": {
     "confirm": "确定",
     "cancel": "取消",
     "copy": "复制",
     "copied": "已复制",
     "refresh": "刷新",
+    "loading": "加载中…",
     "operationFailed": "操作失败：{msg}"
   }
 }
