@@ -25,6 +25,7 @@ const { t } = useI18n()
   font-size: 44px;
   font-weight: 800;
   letter-spacing: 1px;
+  white-space: nowrap;
   background: linear-gradient(90deg, #165dff, #722ed1, #f53f3f);
   background-clip: text;
   -webkit-text-fill-color: transparent;
