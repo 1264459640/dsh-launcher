@@ -657,10 +657,9 @@ async fn ensure_pnpm(
     task_id: &str,
 ) -> Result<std::path::PathBuf, String> {
     // 1. System pnpm available?
-    let sys = tokio::process::Command::new(crate::process::pnpm())
-        .arg("--version")
-        .output()
-        .await;
+    let mut sys_cmd = tokio::process::Command::new(crate::process::pnpm());
+    crate::process::hide_console(&mut sys_cmd);
+    let sys = sys_cmd.arg("--version").output().await;
     if let Ok(out) = sys {
         if out.status.success() {
             return Ok(std::path::PathBuf::from(crate::process::pnpm()));
@@ -671,10 +670,9 @@ async fn ensure_pnpm(
     let tools_dir = state.data_dir.join("tools");
     let local = local_pnpm_path(&tools_dir);
     if local.exists() {
-        let probe = tokio::process::Command::new(&local)
-            .arg("--version")
-            .output()
-            .await;
+        let mut probe_cmd = tokio::process::Command::new(&local);
+        crate::process::hide_console(&mut probe_cmd);
+        let probe = probe_cmd.arg("--version").output().await;
         if let Ok(out) = probe {
             if out.status.success() {
                 return Ok(local);

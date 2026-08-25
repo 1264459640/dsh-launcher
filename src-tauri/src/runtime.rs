@@ -17,10 +17,9 @@ pub struct RuntimeStatus {
 }
 
 async fn probe(program: &str) -> ToolStatus {
-    let output = tokio::process::Command::new(program)
-        .arg("--version")
-        .output()
-        .await;
+    let mut cmd = tokio::process::Command::new(program);
+    crate::process::hide_console(&mut cmd);
+    let output = cmd.arg("--version").output().await;
 
     match output {
         Ok(out) if out.status.success() => ToolStatus {
