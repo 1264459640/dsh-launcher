@@ -197,30 +197,33 @@ async function onCreateProfile() {
         </a-form-item>
 
         <a-form-item :label="t('instanceEdit.defaultProfile')">
-          <a-select
-            v-model="defaultProfile"
-            :placeholder="t('instanceEdit.defaultProfilePlaceholder')"
-            style="max-width: 360px"
-            allow-clear
-            :disabled="!homeId || homeId === DEDICATED"
-          >
-            <a-option v-for="p in profiles" :key="p" :value="p">{{ p }}</a-option>
-          </a-select>
-          <div v-if="homeId && homeId !== DEDICATED" class="profile-create-row">
-            <a-input
-              v-model="newProfileName"
-              :placeholder="t('instanceEdit.profileCreatePlaceholder')"
-              class="profile-create-input"
-            />
-            <a-button
-              size="small"
-              type="primary"
-              :loading="creatingProfile"
-              :disabled="!newProfileName.trim()"
-              @click="onCreateProfile"
+          <div class="profile-row">
+            <a-select
+              v-model="defaultProfile"
+              :placeholder="t('instanceEdit.defaultProfilePlaceholder')"
+              class="profile-select"
+              allow-clear
+              :disabled="!homeId || homeId === DEDICATED"
             >
-              {{ t('instanceEdit.profileCreate') }}
-            </a-button>
+              <a-option v-for="p in profiles" :key="p" :value="p">{{ p }}</a-option>
+            </a-select>
+            <template v-if="homeId && homeId !== DEDICATED">
+              <a-input
+                v-model="newProfileName"
+                :placeholder="t('instanceEdit.profileCreatePlaceholder')"
+                class="profile-create-input"
+                @press-enter="onCreateProfile"
+              />
+              <a-button
+                type="primary"
+                class="profile-create-btn"
+                :loading="creatingProfile"
+                :disabled="!newProfileName.trim()"
+                @click="onCreateProfile"
+              >
+                {{ t('instanceEdit.profileCreate') }}
+              </a-button>
+            </template>
           </div>
         </a-form-item>
       </a-form>
@@ -268,15 +271,36 @@ async function onCreateProfile() {
   max-width: 360px;
 }
 
-.profile-create-row {
+.profile-row {
   display: flex;
   gap: 8px;
-  margin-top: 8px;
-  max-width: 360px;
+  align-items: center;
+  max-width: 560px;
+
+  :deep(.arco-select-view-single) {
+    height: 32px;
+    box-sizing: border-box;
+  }
+
+  :deep(.arco-input-wrapper) {
+    height: 32px;
+    box-sizing: border-box;
+  }
+}
+
+.profile-select {
+  width: 240px;
+  flex-shrink: 0;
 }
 
 .profile-create-input {
   flex: 1;
+  min-width: 0;
+}
+
+.profile-create-btn {
+  flex-shrink: 0;
+  height: 32px;
 }
 
 .env-desc {

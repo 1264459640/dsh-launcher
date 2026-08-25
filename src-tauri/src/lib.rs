@@ -16,6 +16,8 @@ pub struct AppState {
     pub config: StdMutex<config::Config>,
     pub running: tokio::sync::Mutex<HashMap<String, process::RunningInstance>>,
     pub tasks: tokio::sync::Mutex<HashMap<String, tasks::TaskInfo>>,
+    /// Instance whose webview window was opened/focused most recently.
+    pub last_focused_instance: StdMutex<Option<String>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -37,6 +39,7 @@ pub fn run() {
                 config: StdMutex::new(cfg),
                 running: tokio::sync::Mutex::new(HashMap::new()),
                 tasks: tokio::sync::Mutex::new(HashMap::new()),
+                last_focused_instance: StdMutex::new(None),
             });
 
             // System tray with dynamic menu.

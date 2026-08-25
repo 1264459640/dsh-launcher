@@ -658,7 +658,7 @@ async fn ensure_pnpm(
     emit_progress(app, task_id, TaskState::Running, 5, None, None);
     emit_log(app, task_id, msg);
 
-    let mut child = tokio::process::Command::new(crate::process::npm())
+    let child = tokio::process::Command::new(crate::process::npm())
         .args(["install", "--global", "--prefix"])
         .arg(&tools_dir)
         .args(["pnpm@latest"])

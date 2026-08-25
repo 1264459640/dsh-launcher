@@ -1,10 +1,11 @@
 use crate::{process, AppState};
-use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
 const MENU_OPEN_LAUNCHER: &str = "open-launcher";
 const MENU_QUIT: &str = "quit";
+const MENU_RUNNING_SUB: &str = "running-profiles";
 const MENU_OPEN_PREFIX: &str = "open::";
 const MENU_STOP_PREFIX: &str = "stop::";
 
@@ -78,37 +79,47 @@ async fn running_snapshot(app: &AppHandle) -> Vec<RunningItem> {
 fn build_menu(app: &AppHandle, running: &[RunningItem]) -> tauri::Result<Menu<tauri::Wry>> {
     let open_launcher = MenuItem::with_id(app, MENU_OPEN_LAUNCHER, "打开启动器", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "退出启动器", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
+    let sep_running = PredefinedMenuItem::separator(app)?;
+    let sep_quit = PredefinedMenuItem::separator(app)?;
 
-    // Per-instance items, kept owned so the references below stay valid.
+    // Running profiles live in a second-level submenu: each instance gets an
+    // "open window" and a "stop" entry.
     let mut owned: Vec<MenuItem<tauri::Wry>> = Vec::new();
+    let mut running_sub = None;
     if !running.is_empty() {
         for (id, name, profile) in running {
             owned.push(MenuItem::with_id(
                 app,
                 format!("{MENU_OPEN_PREFIX}{id}"),
-                format!("打开窗口：{name}"),
+                format!("打开：{name}（{profile}）"),
                 true,
                 None::<&str>,
             )?);
             owned.push(MenuItem::with_id(
                 app,
                 format!("{MENU_STOP_PREFIX}{id}"),
-                format!("退出 {name}（{profile}）"),
+                format!("停止：{name}（{profile}）"),
                 true,
                 None::<&str>,
             )?);
         }
+        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
+            owned.iter().map(|i| i as &dyn IsMenuItem<tauri::Wry>).collect();
+        running_sub = Some(Submenu::with_id_and_items(
+            app,
+            MENU_RUNNING_SUB,
+            "运行中的 Profile",
+            true,
+            &refs,
+        )?);
     }
 
     let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&open_launcher];
-    if !running.is_empty() {
-        items.push(&separator);
-        for item in &owned {
-            items.push(item);
-        }
+    if let Some(sub) = &running_sub {
+        items.push(&sep_running);
+        items.push(sub);
     }
-    items.push(&separator);
+    items.push(&sep_quit);
     items.push(&quit);
 
     Menu::with_items(app, &items)
@@ -164,26 +175,36 @@ fn handle_double_click(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
+        // Prefer the profile page the user focused last; fall back to the
+        // single running instance; otherwise just show the launcher.
+        let last = state.last_focused_instance.lock().unwrap().clone();
         let running = state.running.lock().await;
-        let count = running.len();
-        let mut first = None;
-        if count == 1 {
-            if let Some((id, entry)) = running.iter().next() {
-                let name = state
-                    .config
-                    .lock()
-                    .unwrap()
-                    .instances
-                    .iter()
-                    .find(|i| i.id == *id)
-                    .map(|i| i.name.clone())
-                    .unwrap_or_else(|| id.clone());
-                first = Some((id.clone(), name, entry.url.clone()));
-            }
-        }
+        let target_id = last
+            .filter(|id| running.contains_key(id))
+            .or_else(|| {
+                if running.len() == 1 {
+                    running.keys().next().cloned()
+                } else {
+                    None
+                }
+            });
+        let target = target_id.and_then(|id| {
+            let entry = running.get(&id)?;
+            let url = entry.url.clone()?;
+            let name = state
+                .config
+                .lock()
+                .unwrap()
+                .instances
+                .iter()
+                .find(|i| i.id == id)
+                .map(|i| i.name.clone())
+                .unwrap_or_else(|| id.clone());
+            Some((id, name, url))
+        });
         drop(running);
 
-        if let Some((id, name, Some(url))) = first {
+        if let Some((id, name, url)) = target {
             let _ = crate::windows::open_instance_window(&app, &id, &name, &url);
         } else {
             show_launcher(&app);

@@ -56,21 +56,28 @@ async function minimize() {
 
 async function close() {
   const w = await appWindow
-  if (!w) return
-  if (store.settings.minimize_to_tray) {
-    w.hide()
-  } else {
-    w.destroy()
-  }
+  // Delegate to the native close request: the Rust CloseRequested handler
+  // honors minimize_to_tray (hide) or lets the window close for real.
+  await w?.close()
+}
+
+// Manual drag: native data-tauri-drag-region only works on elements carrying
+// the attribute, which leaves the menu area in the middle undraggable.
+async function onHeaderMouseDown(e: MouseEvent) {
+  if (!isTauri || e.button !== 0) return
+  const el = e.target as HTMLElement | null
+  if (el?.closest('.window-controls, .arco-menu-item, a, button, input, [data-no-drag]')) return
+  const w = await appWindow
+  w?.startDragging()
 }
 </script>
 
 <template>
   <a-layout class="app-shell">
-    <a-layout-header class="app-header" data-tauri-drag-region>
-      <!-- Brand doubles as the drag region (native decorations are off). -->
-      <div class="app-brand" data-tauri-drag-region>
-        <img src="@/assets/launcher-icon.png" class="app-logo" alt="" data-tauri-drag-region />
+    <a-layout-header class="app-header" @mousedown="onHeaderMouseDown">
+      <!-- Brand; dragging is handled manually via onHeaderMouseDown. -->
+      <div class="app-brand">
+        <img src="@/assets/launcher-icon.png" class="app-logo" alt="" />
         <span class="app-title">{{ t('app.title') }}</span>
         <a-tag v-if="!isTauri" size="small" color="orange">{{ t('app.mockBadge') }}</a-tag>
       </div>
@@ -84,7 +91,7 @@ async function close() {
         <a-menu-item key="download">{{ t('nav.download') }}</a-menu-item>
         <a-menu-item key="settings">{{ t('nav.settings') }}</a-menu-item>
       </a-menu>
-      <div class="window-controls" data-tauri-drag-region="false">
+      <div class="window-controls">
         <button class="wc-btn" title="最小化" @click="minimize">
           <svg viewBox="0 0 12 12" width="12" height="12"><line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.4"/></svg>
         </button>

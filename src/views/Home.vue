@@ -157,7 +157,7 @@ function goEditSelected() {
           {{ t(`home.status.${selectedStatus.state}`) }}
         </a-tag>
         <div v-if="running && selectedStatus?.url" class="running-url">
-          <a-link :href="selectedStatus.url" target="_blank">{{ selectedStatus.url }}</a-link>
+          <a-link @click="onOpenWindow">{{ selectedStatus.url }}</a-link>
           <a-button size="mini" type="text" @click="copyUrl(selectedStatus.url)">
             {{ t('common.copy') }}
           </a-button>

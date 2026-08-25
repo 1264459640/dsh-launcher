@@ -405,9 +405,8 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       return undefined as T
     }
     case 'open_instance_window': {
-      const id = String(args?.id)
-      const status = db.running[id]
-      if (status?.url) window.open(status.url, '_blank')
+      // Browser preview has no Tauri webview windows; deliberately do NOT
+      // window.open here so the browser never navigates to a profile page.
       return undefined as T
     }
     case 'list_instance_status':

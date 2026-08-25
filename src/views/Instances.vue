@@ -47,6 +47,14 @@ function copyUrl(url: string) {
   navigator.clipboard?.writeText(url)
   Message.success(t('common.copied'))
 }
+
+async function onOpenWindow(id: string) {
+  try {
+    await api.openInstanceWindow(id)
+  } catch (e) {
+    Message.error(String(e))
+  }
+}
 </script>
 
 <template>
@@ -79,7 +87,7 @@ function copyUrl(url: string) {
             {{ t(`home.status.${store.statusOf(record.id).state}`) }}
           </a-tag>
           <template v-if="store.statusOf(record.id).url">
-            <a-link :href="store.statusOf(record.id).url!" target="_blank" class="status-url">
+            <a-link class="status-url" @click="onOpenWindow(record.id)">
               {{ store.statusOf(record.id).url }}
             </a-link>
             <a-button size="mini" type="text" @click="copyUrl(store.statusOf(record.id).url!)">
