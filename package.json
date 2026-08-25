@@ -1,0 +1,31 @@
+{
+  "name": "dsh-launcher",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-version, multi-instance launcher for DeepSeek Harness (DSH)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@arco-design/web-vue": "^2.57.0",
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-dialog": "^2.4.2",
+    "pinia": "^2.3.1",
+    "vue": "^3.5.13",
+    "vue-i18n": "^11.1.2",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@intlify/unplugin-vue-i18n": "^6.0.3",
+    "@tauri-apps/cli": "^2.9.4",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "sass": "^1.85.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.3.5",
+    "vue-tsc": "^2.2.8"
+  }
+}
