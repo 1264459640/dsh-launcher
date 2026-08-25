@@ -39,7 +39,9 @@ EXISTING_ID="$(gh release view "$TAG" --repo "$REPO" --json id -q .id 2>/dev/nul
 if [[ -n "$EXISTING_ID" ]]; then
   RELEASE_ID="$EXISTING_ID"
 else
-  RELEASE_ID="$(gh release create "$TAG" --repo "$REPO" --draft --prerelease="$PRERELEASE" --title "$TAG" --notes "Preparing artifacts…" --json id -q .id)"
+  # gh release create has no --json; create first (discard output), then fetch the id.
+  gh release create "$TAG" --repo "$REPO" --draft --prerelease="$PRERELEASE" --title "$TAG" --notes "Preparing artifacts…" >/dev/null
+  RELEASE_ID="$(gh release view "$TAG" --repo "$REPO" --json id -q .id)"
 fi
 
 echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
