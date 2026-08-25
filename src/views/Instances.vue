@@ -55,7 +55,7 @@ function copyUrl(url: string) {
       <div class="dl-card-title">
         <h3>{{ t('instances.title') }}</h3>
         <div class="dl-toolbar">
-          <a-button type="primary" @click="router.push({ name: 'instance-new' })">
+          <a-button type="primary" @click="router.push({ name: 'download' })">
             {{ t('instances.newInstance') }}
           </a-button>
           <a-button @click="router.push({ name: 'download' })">{{ t('instances.goDownload') }}</a-button>
@@ -108,7 +108,7 @@ function copyUrl(url: string) {
             <template #image>
               <div class="empty-title">{{ t('instances.emptyTitle') }}</div>
             </template>
-            <a-button type="primary" @click="router.push({ name: 'instance-new' })">
+            <a-button type="primary" @click="router.push({ name: 'download' })">
               {{ t('instances.newInstance') }}
             </a-button>
           </a-empty>

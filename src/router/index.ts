@@ -6,7 +6,6 @@ const router = createRouter({
   routes: [
     { path: '/', name: 'home', component: () => import('@/views/Home.vue') },
     { path: '/instances', name: 'instances', component: () => import('@/views/Instances.vue') },
-    { path: '/instances/new', name: 'instance-new', component: () => import('@/views/InstanceEdit.vue') },
     { path: '/instances/:id', name: 'instance-edit', component: () => import('@/views/InstanceEdit.vue') },
     {
       path: '/download',
