@@ -66,7 +66,6 @@ async function onOpenWindow(id: string) {
           <a-button type="primary" @click="router.push({ name: 'download' })">
             {{ t('instances.newInstance') }}
           </a-button>
-          <a-button @click="router.push({ name: 'download' })">{{ t('instances.goDownload') }}</a-button>
         </div>
       </div>
 

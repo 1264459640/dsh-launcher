@@ -71,6 +71,20 @@ const selectedKeys = computed(() => {
 
 const onTasksPage = computed(() => route.name === 'tasks')
 
+const onInstancePage = computed(() => route.name === 'instances' || route.name === 'instance-edit')
+
+const instancePageTitle = computed(() => {
+  if (route.name === 'instances') return t('instances.title')
+  if (route.name === 'instance-edit') {
+    return route.params.id ? t('instanceEdit.titleEdit') : t('instanceEdit.titleNew')
+  }
+  return ''
+})
+
+function onHeaderBack() {
+  router.push({ name: 'home' })
+}
+
 function onFabClick() {
   if (onTasksPage.value) {
     router.back()
@@ -120,12 +134,19 @@ async function onHeaderMouseDown(e: MouseEvent) {
   <a-layout class="app-shell">
     <a-layout-header class="app-header" @mousedown="onHeaderMouseDown">
       <!-- Brand; dragging is handled manually via onHeaderMouseDown. -->
-      <div class="app-brand">
+      <div v-if="!onInstancePage" class="app-brand">
         <img src="@/assets/launcher-icon.png" class="app-logo" alt="" />
         <span class="app-title">{{ t('app.title') }}</span>
         <a-tag v-if="!isTauri" size="small" color="orange">{{ t('app.mockBadge') }}</a-tag>
       </div>
+      <template v-if="onInstancePage">
+        <div class="header-back">
+          <button class="header-back-btn" @click="onHeaderBack">←</button>
+          <span class="header-back-title">{{ instancePageTitle }}</span>
+        </div>
+      </template>
       <a-menu
+        v-else
         mode="horizontal"
         :selected-keys="selectedKeys"
         class="app-menu"
@@ -168,6 +189,45 @@ async function onHeaderMouseDown(e: MouseEvent) {
 <style lang="scss" scoped>
 .app-shell {
   height: 100%;
+}
+
+.header-back {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.header-back-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--color-text-2);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+
+  &:hover {
+    background: var(--color-fill-2);
+    color: rgb(var(--primary-6));
+  }
+}
+
+.header-back-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-content {

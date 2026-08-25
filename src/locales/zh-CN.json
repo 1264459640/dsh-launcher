@@ -36,7 +36,6 @@
   "instances": {
     "title": "实例列表",
     "newInstance": "新建实例",
-    "goDownload": "前往下载",
     "emptyTitle": "还没有实例",
     "emptyDesc": "创建一个实例开始：选择 DSH 版本、DSH_HOME 与 Profile。",
     "deleted": "实例已删除",

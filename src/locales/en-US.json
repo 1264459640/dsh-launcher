@@ -36,7 +36,6 @@
   "instances": {
     "title": "Instances",
     "newInstance": "New instance",
-    "goDownload": "Go to download",
     "emptyTitle": "No instances yet",
     "emptyDesc": "Create an instance to get started: pick a DSH version, a DSH_HOME and a profile.",
     "deleted": "Instance deleted",
