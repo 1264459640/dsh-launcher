@@ -6,11 +6,19 @@ const router = createRouter({
   routes: [
     { path: '/', name: 'home', component: () => import('@/views/Home.vue') },
     { path: '/instances', name: 'instances', component: () => import('@/views/Instances.vue') },
-    { path: '/versions', name: 'versions', component: () => import('@/views/Versions.vue') },
-    { path: '/plugins', name: 'plugins', component: () => import('@/views/Plugins.vue') },
-    { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue') },
     { path: '/instances/new', name: 'instance-new', component: () => import('@/views/InstanceEdit.vue') },
     { path: '/instances/:id', name: 'instance-edit', component: () => import('@/views/InstanceEdit.vue') },
+    {
+      path: '/download',
+      component: () => import('@/views/Download.vue'),
+      children: [
+        { path: '', name: 'download', redirect: { name: 'download-create' } },
+        { path: 'create', name: 'download-create', component: () => import('@/views/download/CreatePick.vue') },
+        { path: 'create/:version', name: 'download-name', component: () => import('@/views/download/NameInstance.vue') },
+        { path: 'plugins', name: 'download-plugins', component: () => import('@/views/download/PluginsSoon.vue') },
+      ],
+    },
+    { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

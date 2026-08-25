@@ -10,7 +10,9 @@ export default defineConfig({
     // Discovers every JSON locale file under src/locales, pre-compiles the
     // messages at build time and hot-reloads them during development.
     VueI18nPlugin({
-      include: [fileURLToPath(new URL('./src/locales/**', import.meta.url))],
+      // Normalize to posix separators: picomatch patterns never match
+      // backslashes on Windows otherwise.
+      include: [fileURLToPath(new URL('./src/locales/**', import.meta.url)).replace(/\\/g, '/')],
       strictMessage: false,
       escapeHtml: false,
     }),

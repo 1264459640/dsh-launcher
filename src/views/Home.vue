@@ -146,6 +146,27 @@ function goEditSelected() {
   <div class="home-page">
     <!-- Left launch panel -->
     <aside class="launch-panel">
+      <div class="identity-block">
+        <div class="instance-avatar">⚡</div>
+        <div class="instance-name">{{ selectedInstance?.name ?? '—' }}</div>
+        <a-tag
+          v-if="selectedStatus"
+          :color="selectedStatus.state === 'running' ? 'green' : selectedStatus.state === 'starting' ? 'orange' : 'gray'"
+          size="small"
+        >
+          {{ t(`home.status.${selectedStatus.state}`) }}
+        </a-tag>
+        <div v-if="running && selectedStatus?.url" class="running-url">
+          <a-link :href="selectedStatus.url" target="_blank">{{ selectedStatus.url }}</a-link>
+          <a-button size="mini" type="text" @click="copyUrl(selectedStatus.url)">
+            {{ t('common.copy') }}
+          </a-button>
+        </div>
+        <a-tooltip v-if="sharedHome" :content="t('home.sharedHomeWarning')">
+          <a-tag color="orangered" size="small">{{ t('home.sharedHome') }}</a-tag>
+        </a-tooltip>
+      </div>
+
       <div class="selector-block">
         <div class="field">
           <span class="field-label">{{ t('home.instance') }}</span>
@@ -182,27 +203,6 @@ function goEditSelected() {
         </div>
       </div>
 
-      <div class="identity-block">
-        <div class="instance-avatar">⚡</div>
-        <div class="instance-name">{{ selectedInstance?.name ?? '—' }}</div>
-        <a-tag
-          v-if="selectedStatus"
-          :color="selectedStatus.state === 'running' ? 'green' : selectedStatus.state === 'starting' ? 'orange' : 'gray'"
-          size="small"
-        >
-          {{ t(`home.status.${selectedStatus.state}`) }}
-        </a-tag>
-        <div v-if="running && selectedStatus?.url" class="running-url">
-          <a-link :href="selectedStatus.url" target="_blank">{{ selectedStatus.url }}</a-link>
-          <a-button size="mini" type="text" @click="copyUrl(selectedStatus.url)">
-            {{ t('common.copy') }}
-          </a-button>
-        </div>
-        <a-tooltip v-if="sharedHome" :content="t('home.sharedHomeWarning')">
-          <a-tag color="orangered" size="small">{{ t('home.sharedHome') }}</a-tag>
-        </a-tooltip>
-      </div>
-
       <div class="action-block">
         <template v-if="!running">
           <a-button
@@ -228,11 +228,11 @@ function goEditSelected() {
           </a-button>
         </template>
         <div class="mini-actions">
-          <a-button long :disabled="!selectedInstance" @click="goEditSelected">
-            {{ t('home.editSelected') }}
-          </a-button>
-          <a-button long @click="router.push({ name: 'instances' })">
+          <a-button class="mini-button" @click="router.push({ name: 'instances' })">
             {{ t('home.instanceList') }}
+          </a-button>
+          <a-button class="mini-button" :disabled="!selectedInstance" @click="goEditSelected">
+            {{ t('home.editSelected') }}
           </a-button>
         </div>
       </div>
@@ -265,6 +265,7 @@ function goEditSelected() {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-bottom: 14px;
 }
 
 .field {
@@ -343,6 +344,12 @@ function goEditSelected() {
 .mini-actions {
   display: flex;
   gap: 10px;
+  justify-content: center;
+}
+
+.mini-button {
+  max-width: 132px;
+  width: 50%;
 }
 
 .news-area {

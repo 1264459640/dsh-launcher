@@ -58,7 +58,7 @@ function copyUrl(url: string) {
           <a-button type="primary" @click="router.push({ name: 'instance-new' })">
             {{ t('instances.newInstance') }}
           </a-button>
-          <a-button @click="router.push({ name: 'versions' })">{{ t('instances.goVersions') }}</a-button>
+          <a-button @click="router.push({ name: 'download' })">{{ t('instances.goDownload') }}</a-button>
         </div>
       </div>
 

@@ -142,7 +142,7 @@ function removeEnvRow(idx: number) {
           </template>
           <a-alert v-else type="warning">
             {{ t('instanceEdit.noVersion') }}
-            <a-link @click="router.push({ name: 'versions' })">{{ t('instanceEdit.goVersions') }}</a-link>
+            <a-link @click="router.push({ name: 'download' })">{{ t('instanceEdit.goDownload') }}</a-link>
           </a-alert>
         </a-form-item>
 

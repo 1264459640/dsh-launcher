@@ -10,6 +10,7 @@ import type {
   InstanceStatus,
   LauncherSettings,
   NewInstanceInput,
+  RemoteVersion,
 } from './types'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -140,7 +141,12 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
     case 'list_versions':
       return db.versions as T
     case 'fetch_available_versions':
-      return ['0.1.0-rc.6', '0.1.0-rc.5', '0.1.0-rc.4', '0.1.0-rc.3'] as T
+      return [
+        { version: '0.1.0-rc.6', released_at: '2026-08-01T12:00:00Z' },
+        { version: '0.1.0-rc.5', released_at: '2026-07-15T09:30:00Z' },
+        { version: '0.1.0-rc.4', released_at: '2026-07-01T10:00:00Z' },
+        { version: '0.1.0-rc.3', released_at: '2026-06-15T08:00:00Z' },
+      ] as T
     case 'install_version': {
       const version = String(args?.version)
       if (db.versions.some((v) => v.version === version)) fail(`版本 ${version} 已安装`)
@@ -149,19 +155,22 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         version,
         dir: `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\versions\\${version}`,
       }
-      // Simulate progress.
-      let pct = 0
-      emitProgress({ version, percent: 0, stage: 'downloading', message: null })
-      const timer = setInterval(() => {
-        pct += 20
-        emitProgress({ version, percent: Math.min(pct, 100), stage: pct >= 100 ? 'done' : 'installing', message: null })
-        if (pct >= 100) {
-          clearInterval(timer)
-          db.versions.push(v)
-          saveDb(db)
-        }
-      }, 300)
-      return v as T
+      // Simulate progress; the command resolves once the install completes.
+      return new Promise((resolve) => {
+        let pct = 0
+        emitProgress({ version, percent: 0, stage: 'downloading', message: null })
+        const timer = setInterval(() => {
+          pct += 20
+          const done = pct >= 100
+          emitProgress({ version, percent: Math.min(pct, 100), stage: done ? 'done' : 'installing', message: null })
+          if (done) {
+            clearInterval(timer)
+            db.versions.push(v)
+            saveDb(db)
+            resolve(v)
+          }
+        }, 300)
+      }) as T
     }
     case 'remove_version': {
       const id = String(args?.id)
@@ -277,7 +286,7 @@ export const api = {
   removeHome: (id: string) => call<void>('remove_home', { id }),
 
   listVersions: () => call<DshVersion[]>('list_versions'),
-  fetchAvailableVersions: () => call<string[]>('fetch_available_versions'),
+  fetchAvailableVersions: () => call<RemoteVersion[]>('fetch_available_versions'),
   installVersion: (version: string) => call<DshVersion>('install_version', { version }),
   removeVersion: (id: string) => call<void>('remove_version', { id }),
 

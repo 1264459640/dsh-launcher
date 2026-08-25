@@ -25,9 +25,10 @@ watch(
 
 const selectedKeys = computed(() => {
   const name = route.name as string
-  if (name?.startsWith('instance')) return ['instances']
-  if (['versions', 'plugins', 'settings'].includes(name)) return [name]
-  return ['home']
+  if (name === 'download' || name?.startsWith('download-')) return ['download']
+  if (name === 'settings') return ['settings']
+  if (name === 'home') return ['home']
+  return []
 })
 
 function onMenuSelect(key: string) {
@@ -50,9 +51,7 @@ function onMenuSelect(key: string) {
         @menu-item-click="onMenuSelect"
       >
         <a-menu-item key="home">{{ t('nav.home') }}</a-menu-item>
-        <a-menu-item key="instances">{{ t('nav.instances') }}</a-menu-item>
-        <a-menu-item key="versions">{{ t('nav.versions') }}</a-menu-item>
-        <a-menu-item key="plugins">{{ t('nav.plugins') }}</a-menu-item>
+        <a-menu-item key="download">{{ t('nav.download') }}</a-menu-item>
         <a-menu-item key="settings">{{ t('nav.settings') }}</a-menu-item>
       </a-menu>
     </a-layout-header>

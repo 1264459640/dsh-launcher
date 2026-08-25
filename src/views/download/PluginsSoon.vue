@@ -5,21 +5,19 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <div class="dl-page">
-    <div class="dl-card coming-card">
-      <div class="coming-text">{{ t('plugins.coming') }}</div>
-      <div class="coming-desc">{{ t('plugins.desc') }}</div>
-    </div>
+  <div class="soon-page">
+    <div class="coming-text">{{ t('plugins.coming') }}</div>
+    <div class="coming-desc">{{ t('plugins.desc') }}</div>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.coming-card {
+.soon-page {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 420px;
+  min-height: calc(100vh - var(--dl-header-height) - 120px);
   gap: 16px;
 }
 

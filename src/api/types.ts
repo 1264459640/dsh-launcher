@@ -46,6 +46,11 @@ export interface InstallProgress {
   message: string | null
 }
 
+export interface RemoteVersion {
+  version: string
+  released_at: string | null
+}
+
 export interface NewInstanceInput {
   name: string
   version_id: string
