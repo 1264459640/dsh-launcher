@@ -266,7 +266,8 @@ pub fn list_profiles(state: State<'_, AppState>, home_id: String) -> Result<Vec<
     if let Ok(entries) = std::fs::read_dir(&profiles_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name == "node_modules" {
+            // Skip the template and non-profile entries.
+            if name == "node_modules" || name == "__temp__" {
                 continue;
             }
             if entry.path().is_dir() {
@@ -276,6 +277,69 @@ pub fn list_profiles(state: State<'_, AppState>, home_id: String) -> Result<Vec<
     }
     out.sort();
     Ok(out)
+}
+
+/// Creates a new profile by copying the `__temp__` template inside the
+/// given HOME. Returns the created profile name.
+#[tauri::command(rename_all = "snake_case")]
+pub fn create_profile(
+    state: State<'_, AppState>,
+    home_id: String,
+    name: String,
+) -> Result<String, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Profile 名称不能为空".to_string());
+    }
+    if name == "__temp__" || name == "node_modules" {
+        return Err(format!("「{name}」为保留名称，不能使用"));
+    }
+    // Basic name hygiene: only letters, digits, dash, underscore, dot.
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err("Profile 名称只能包含字母、数字、-、_、." .to_string());
+    }
+
+    let profiles_dir = {
+        let cfg = state.config.lock().unwrap();
+        let home = cfg
+            .homes
+            .iter()
+            .find(|h| h.id == home_id)
+            .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+        home.path.join("profiles")
+    };
+
+    let temp_dir = profiles_dir.join("__temp__");
+    if !temp_dir.is_dir() {
+        return Err("模板 __temp__ 不存在，请先创建实例以生成模板".to_string());
+    }
+    let target = profiles_dir.join(&name);
+    if target.exists() {
+        return Err(format!("Profile「{name}」已存在"));
+    }
+
+    copy_dir_recursive(&temp_dir, &target).map_err(|e| format!("创建 Profile 失败: {e}"))?;
+    Ok(name)
+}
+
+/// Recursively copies a directory tree.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if ty.is_file() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -110,6 +110,8 @@ function emitTaskLog(l: TaskLog) {
 
 // Mock task storage (runtime only, like the real backend).
 const mockTasks = new Map<string, TaskInfo>()
+// Mock profiles created at runtime per home id.
+const mockProfiles: Record<string, string[]> = {}
 
 function mockNewId(prefix: string): string {
   return `${prefix}-${uuid()}`
@@ -348,9 +350,24 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       const homeId = String(args?.home_id)
       const home = db.homes.find((h) => h.id === homeId)
       if (!home) fail('DSH_HOME 不存在')
-      // Mock: the default home has the real profile set; others are empty.
-      if (home.path.endsWith('.dsh')) return ['web', 'demo', 'pack'] as T
-      return ['web'] as T
+      // Mock: combine the default set with previously created profiles.
+      const base: string[] = home.path.endsWith('.dsh') ? ['web', 'demo', 'pack'] : ['web']
+      const extras = mockProfiles[homeId] ?? []
+      return [...base, ...extras] as T
+    }
+    case 'create_profile': {
+      const homeId = String(args?.home_id)
+      const name = String(args?.name ?? '').trim()
+      if (!name) fail('Profile 名称不能为空')
+      if (name === '__temp__' || name === 'node_modules') fail(`「${name}」为保留名称，不能使用`)
+      if (!/^[A-Za-z0-9._-]+$/.test(name)) fail('Profile 名称只能包含字母、数字、-、_、.')
+      const base: string[] = []
+      const home = db.homes.find((h) => h.id === homeId)
+      if (home && home.path.endsWith('.dsh')) base.push(...['web', 'demo', 'pack'])
+      mockProfiles[homeId] = mockProfiles[homeId] ?? []
+      if (base.includes(name) || mockProfiles[homeId].includes(name)) fail(`Profile「${name}」已存在`)
+      mockProfiles[homeId].push(name)
+      return name as T
     }
     case 'start_instance': {
       const id = String(args?.id)
@@ -436,6 +453,8 @@ export const api = {
   deleteInstance: (id: string) => call<void>('delete_instance', { id }),
 
   listProfiles: (homeId: string) => call<string[]>('list_profiles', { home_id: homeId }),
+  createProfile: (homeId: string, name: string) =>
+    call<string>('create_profile', { home_id: homeId, name }),
 
   startInstance: (id: string, profile: string) => call<void>('start_instance', { id, profile }),
   stopInstance: (id: string) => call<void>('stop_instance', { id }),

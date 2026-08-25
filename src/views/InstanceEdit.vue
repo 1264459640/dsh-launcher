@@ -24,6 +24,8 @@ const homeId = ref<string | undefined>(undefined)
 const dedicatedPath = ref('')
 const defaultProfile = ref<string | undefined>(undefined)
 const profiles = ref<string[]>([])
+const newProfileName = ref('')
+const creatingProfile = ref(false)
 const saving = ref(false)
 
 interface EnvRow {
@@ -139,6 +141,23 @@ function addEnvRow() {
 function removeEnvRow(idx: number) {
   envRows.value.splice(idx, 1)
 }
+
+async function onCreateProfile() {
+  const name = newProfileName.value.trim()
+  if (!homeId.value || !name) return
+  creatingProfile.value = true
+  try {
+    await api.createProfile(homeId.value, name)
+    profiles.value = await api.listProfiles(homeId.value)
+    newProfileName.value = ''
+    defaultProfile.value = name
+    Message.success(t('instanceEdit.profileCreated', { name }))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    creatingProfile.value = false
+  }
+}
 </script>
 
 <template>
@@ -183,10 +202,26 @@ function removeEnvRow(idx: number) {
             :placeholder="t('instanceEdit.defaultProfilePlaceholder')"
             style="max-width: 360px"
             allow-clear
-            :disabled="!homeId"
+            :disabled="!homeId || homeId === DEDICATED"
           >
             <a-option v-for="p in profiles" :key="p" :value="p">{{ p }}</a-option>
           </a-select>
+          <div v-if="homeId && homeId !== DEDICATED" class="profile-create-row">
+            <a-input
+              v-model="newProfileName"
+              :placeholder="t('instanceEdit.profileCreatePlaceholder')"
+              class="profile-create-input"
+            />
+            <a-button
+              size="small"
+              type="primary"
+              :loading="creatingProfile"
+              :disabled="!newProfileName.trim()"
+              @click="onCreateProfile"
+            >
+              {{ t('instanceEdit.profileCreate') }}
+            </a-button>
+          </div>
         </a-form-item>
       </a-form>
     </div>
@@ -231,6 +266,17 @@ function removeEnvRow(idx: number) {
 .dedicated-hint {
   margin-top: 8px;
   max-width: 360px;
+}
+
+.profile-create-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  max-width: 360px;
+}
+
+.profile-create-input {
+  flex: 1;
 }
 
 .env-desc {
