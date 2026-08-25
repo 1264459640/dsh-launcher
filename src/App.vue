@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useLauncherStore } from '@/stores/launcher'
+import type { ThemeMode } from '@/api/types'
 import { api } from '@/api'
 
 const route = useRoute()
@@ -11,19 +12,52 @@ const { t, locale } = useI18n()
 const store = useLauncherStore()
 const isTauri = api.isTauri
 
+// --- Theme: light / dark / follow system -------------------------------------
+
+const themeMedia = window.matchMedia('(prefers-color-scheme: dark)')
+
+/** Applies the effective Arco theme to <body> (body[arco-theme='dark']). */
+function applyTheme(mode: ThemeMode) {
+  const dark = mode === 'dark' || (mode === 'system' && themeMedia.matches)
+  if (dark) {
+    document.body.setAttribute('arco-theme', 'dark')
+  } else {
+    document.body.removeAttribute('arco-theme')
+  }
+}
+
+function onSystemThemeChange() {
+  if (store.settings.theme === 'system') applyTheme('system')
+}
+
 onMounted(async () => {
   await store.init()
   locale.value = store.settings.locale || 'zh-CN'
+  // Apply the persisted theme early (before init resolves the settings may
+  // still be defaults; the watch below re-applies on any change).
+  applyTheme(store.settings.theme || 'system')
+  themeMedia.addEventListener('change', onSystemThemeChange)
   // If Node.js is missing, guide the user to install it before anything else.
   if (!store.runtime?.node?.installed && route.name !== 'setup') {
     router.push({ name: 'setup' })
   }
 })
 
+onUnmounted(() => {
+  themeMedia.removeEventListener('change', onSystemThemeChange)
+})
+
 watch(
   () => store.settings.locale,
   (v) => {
     if (v) locale.value = v
+  },
+)
+
+watch(
+  () => store.settings.theme,
+  (v) => {
+    if (v) applyTheme(v)
   },
 )
 

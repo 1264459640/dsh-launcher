@@ -92,6 +92,12 @@
     "title": "Settings",
     "general": "General",
     "language": "Language",
+    "theme": {
+      "label": "Theme",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "Follow system"
+    },
     "minimizeToTray": "Minimize to system tray when closing the main window",
     "autostart": "Launch at login",
     "newsSource": "News source",

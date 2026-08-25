@@ -449,6 +449,12 @@ pub fn update_settings(
     if let Some(v) = settings.news_source {
         cfg.settings.news_source = v.trim().to_string();
     }
+    if let Some(v) = settings.theme {
+        match v.as_str() {
+            "light" | "dark" | "system" => cfg.settings.theme = v,
+            _ => return Err(format!("无效的主题: {v}")),
+        }
+    }
     let out = cfg.settings.clone();
     save_state(&state, &cfg)?;
     Ok(out)

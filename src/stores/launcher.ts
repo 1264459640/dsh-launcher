@@ -36,6 +36,7 @@ export const useLauncherStore = defineStore('launcher', {
       autostart: false,
       last_instance_id: null,
       news_source: '',
+      theme: 'system',
     },
     statusById: {},
     tasks: {},

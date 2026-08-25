@@ -48,6 +48,9 @@ pub struct LauncherSettings {
     /// News feed source: an http(s) URL or a local .md/.html file path.
     #[serde(default)]
     pub news_source: String,
+    /// UI theme: "light" | "dark" | "system" (follow the OS setting).
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_locale() -> String {
@@ -58,6 +61,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_theme() -> String {
+    "system".to_string()
+}
+
 impl Default for LauncherSettings {
     fn default() -> Self {
         Self {
@@ -66,6 +73,7 @@ impl Default for LauncherSettings {
             autostart: false,
             last_instance_id: None,
             news_source: String::new(),
+            theme: default_theme(),
         }
     }
 }
@@ -116,6 +124,8 @@ pub struct SettingsPatch {
     pub last_instance_id: Option<String>,
     #[serde(default)]
     pub news_source: Option<String>,
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

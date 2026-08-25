@@ -28,7 +28,11 @@ export interface LauncherSettings {
   autostart: boolean
   last_instance_id: string | null
   news_source: string
+  theme: ThemeMode
 }
+
+/** UI theme: explicit light/dark, or follow the OS color scheme. */
+export type ThemeMode = 'light' | 'dark' | 'system'
 
 export type InstanceState = 'stopped' | 'starting' | 'running' | 'exited'
 

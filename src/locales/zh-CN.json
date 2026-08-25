@@ -92,6 +92,12 @@
     "title": "设置",
     "general": "常规",
     "language": "界面语言",
+    "theme": {
+      "label": "主题",
+      "light": "浅色",
+      "dark": "深色",
+      "system": "跟随系统"
+    },
     "minimizeToTray": "关闭主窗口时最小化到系统托盘",
     "autostart": "开机自动启动启动器",
     "newsSource": "新闻来源",

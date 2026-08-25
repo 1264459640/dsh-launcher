@@ -3,11 +3,18 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
+import type { ThemeMode } from '@/api/types'
 import { SUPPORTED_LOCALES } from '@/i18n'
 import { useLauncherStore } from '@/stores/launcher'
 
 const { t } = useI18n()
 const store = useLauncherStore()
+
+const THEME_OPTIONS = computed<{ value: ThemeMode; label: string }[]>(() => [
+  { value: 'light', label: t('settings.theme.light') },
+  { value: 'dark', label: t('settings.theme.dark') },
+  { value: 'system', label: t('settings.theme.system') },
+])
 
 // --- General settings -------------------------------------------------------
 
@@ -18,6 +25,10 @@ async function patchSettings(patch: Parameters<typeof api.updateSettings>[0]) {
   } catch (e) {
     Message.error(String(e))
   }
+}
+
+async function onThemeChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
+  await patchSettings({ theme: String(value) as ThemeMode })
 }
 
 async function onLocaleChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
@@ -109,6 +120,17 @@ const homeColumns = computed(() => [
           >
             <a-option v-for="l in SUPPORTED_LOCALES" :key="l.value" :value="l.value">
               {{ l.label }}
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item :label="t('settings.theme.label')">
+          <a-select
+            :model-value="store.settings.theme"
+            style="width: 220px"
+            @change="onThemeChange"
+          >
+            <a-option v-for="o in THEME_OPTIONS" :key="o.value" :value="o.value">
+              {{ o.label }}
             </a-option>
           </a-select>
         </a-form-item>

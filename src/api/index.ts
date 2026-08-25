@@ -68,6 +68,7 @@ function seedDb(): MockDb {
       autostart: false,
       last_instance_id: 'i-main',
       news_source: '',
+      theme: 'system',
     },
     running: {},
   }
