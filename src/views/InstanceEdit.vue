@@ -198,15 +198,16 @@ async function onCreateProfile() {
 
         <a-form-item :label="t('instanceEdit.defaultProfile')">
           <div class="profile-row">
-            <a-select
-              v-model="defaultProfile"
-              :placeholder="t('instanceEdit.defaultProfilePlaceholder')"
-              class="profile-select"
-              allow-clear
-              :disabled="!homeId || homeId === DEDICATED"
-            >
-              <a-option v-for="p in profiles" :key="p" :value="p">{{ p }}</a-option>
-            </a-select>
+            <div class="profile-select-wrap">
+              <a-select
+                v-model="defaultProfile"
+                :placeholder="t('instanceEdit.defaultProfilePlaceholder')"
+                allow-clear
+                :disabled="!homeId || homeId === DEDICATED"
+              >
+                <a-option v-for="p in profiles" :key="p" :value="p">{{ p }}</a-option>
+              </a-select>
+            </div>
             <template v-if="homeId && homeId !== DEDICATED">
               <a-input
                 v-model="newProfileName"
@@ -288,7 +289,7 @@ async function onCreateProfile() {
   }
 }
 
-.profile-select {
+.profile-select-wrap {
   width: 200px;
   flex-shrink: 0;
 }
