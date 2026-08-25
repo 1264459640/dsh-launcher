@@ -418,8 +418,7 @@ function goEditSelected() {
 }
 
 .mini-button {
-  max-width: 132px;
-  width: 50%;
+  flex: 1;
 }
 
 .news-area {
