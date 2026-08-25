@@ -263,7 +263,7 @@ async function onCreateProfile() {
 
 <style lang="scss" scoped>
 .edit-form {
-  max-width: 560px;
+  max-width: 640px;
 }
 
 .dedicated-hint {
@@ -275,7 +275,7 @@ async function onCreateProfile() {
   display: flex;
   gap: 8px;
   align-items: center;
-  max-width: 560px;
+  width: 100%;
 
   :deep(.arco-select-view-single) {
     height: 32px;
@@ -289,7 +289,7 @@ async function onCreateProfile() {
 }
 
 .profile-select {
-  width: 240px;
+  width: 200px;
   flex-shrink: 0;
 }
 

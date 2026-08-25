@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
@@ -64,6 +64,12 @@ watch(selectedInstanceId, () => {
       store.settings = s
     })
   }
+})
+
+// On mount the instance id may already be restored from settings without a
+// watch change (e.g. navigating back to this page) — load profiles eagerly.
+onMounted(() => {
+  if (selectedInstanceId.value) loadProfiles()
 })
 
 watch(
