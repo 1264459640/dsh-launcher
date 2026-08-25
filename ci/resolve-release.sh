@@ -34,13 +34,21 @@ else
   PRERELEASE="true"
 fi
 
-# Idempotent: reuse the release if the tag already exists (re-run of a run).
+# Idempotent: reuse the release if it already exists (re-run of a run).
 EXISTING_ID="$(gh release view "$TAG" --repo "$REPO" --json id -q .id 2>/dev/null || true)"
 if [[ -n "$EXISTING_ID" ]]; then
   RELEASE_ID="$EXISTING_ID"
 else
-  # gh release create has no --json; create first (discard output), then fetch the id.
-  gh release create "$TAG" --repo "$REPO" --draft --prerelease="$PRERELEASE" --title "$TAG" --notes "Preparing artifacts…" >/dev/null
+  # gh release create requires a real git tag on the remote; in a shallow
+  # CI checkout it silently produces an UNTAGGED release otherwise (which
+  # tauri-action then cannot find by tag). Create + push the tag explicitly.
+  if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+    git tag "$TAG"
+    git push origin "refs/tags/$TAG"
+  fi
+  # --verify-tag aborts if the remote tag is missing, so an untagged release
+  # is impossible here.
+  gh release create "$TAG" --repo "$REPO" --verify-tag --draft --prerelease="$PRERELEASE" --title "$TAG" --notes "Preparing artifacts…" >/dev/null
   RELEASE_ID="$(gh release view "$TAG" --repo "$REPO" --json id -q .id)"
 fi
 
