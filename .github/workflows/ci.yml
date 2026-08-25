@@ -63,6 +63,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # No pnpm in this job; disable package-manager cache so setup-node
+          # does not try to locate a pnpm executable.
+          package-manager-cache: false
       # This project has no container-backed protocol tests; the isolated
       # Linux job runs the release-note classifier tests and the manifest
       # synchronization check instead.

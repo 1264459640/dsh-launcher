@@ -11,7 +11,12 @@ fn record_focus(app: &AppHandle, instance_id: &str) {
 }
 
 /// Opens (or focuses) the webview window hosting the instance's DSH Web GUI.
-pub fn open_instance_window(app: &AppHandle, instance_id: &str, name: &str, url: &str) -> Result<(), String> {
+pub fn open_instance_window(
+    app: &AppHandle,
+    instance_id: &str,
+    name: &str,
+    url: &str,
+) -> Result<(), String> {
     let label = format!("instance-{instance_id}");
     if let Some(win) = app.get_webview_window(&label) {
         let _ = win.show();

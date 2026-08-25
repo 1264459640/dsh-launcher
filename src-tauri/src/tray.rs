@@ -77,7 +77,8 @@ async fn running_snapshot(app: &AppHandle) -> Vec<RunningItem> {
 }
 
 fn build_menu(app: &AppHandle, running: &[RunningItem]) -> tauri::Result<Menu<tauri::Wry>> {
-    let open_launcher = MenuItem::with_id(app, MENU_OPEN_LAUNCHER, "打开启动器", true, None::<&str>)?;
+    let open_launcher =
+        MenuItem::with_id(app, MENU_OPEN_LAUNCHER, "打开启动器", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "退出启动器", true, None::<&str>)?;
     let sep_running = PredefinedMenuItem::separator(app)?;
     let sep_quit = PredefinedMenuItem::separator(app)?;
@@ -103,8 +104,10 @@ fn build_menu(app: &AppHandle, running: &[RunningItem]) -> tauri::Result<Menu<ta
                 None::<&str>,
             )?);
         }
-        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
-            owned.iter().map(|i| i as &dyn IsMenuItem<tauri::Wry>).collect();
+        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = owned
+            .iter()
+            .map(|i| i as &dyn IsMenuItem<tauri::Wry>)
+            .collect();
         running_sub = Some(Submenu::with_id_and_items(
             app,
             MENU_RUNNING_SUB,
@@ -179,15 +182,13 @@ fn handle_double_click(app: &AppHandle) {
         // single running instance; otherwise just show the launcher.
         let last = state.last_focused_instance.lock().unwrap().clone();
         let running = state.running.lock().await;
-        let target_id = last
-            .filter(|id| running.contains_key(id))
-            .or_else(|| {
-                if running.len() == 1 {
-                    running.keys().next().cloned()
-                } else {
-                    None
-                }
-            });
+        let target_id = last.filter(|id| running.contains_key(id)).or_else(|| {
+            if running.len() == 1 {
+                running.keys().next().cloned()
+            } else {
+                None
+            }
+        });
         let target = target_id.and_then(|id| {
             let entry = running.get(&id)?;
             let url = entry.url.clone()?;

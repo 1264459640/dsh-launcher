@@ -71,7 +71,10 @@ pub fn build_env(cfg: &Config, instance_id: &str) -> Result<Vec<(String, String)
         .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
 
     let mut env: Vec<(String, String)> = Vec::new();
-    env.push(("DSH_HOME".to_string(), home.path.to_string_lossy().to_string()));
+    env.push((
+        "DSH_HOME".to_string(),
+        home.path.to_string_lossy().to_string(),
+    ));
     env.push(("DSH_LAUNCHER_INSTANCE".to_string(), inst.name.clone()));
     for (k, v) in &inst.env_overrides {
         if k == "DSH_HOME" {
@@ -160,8 +163,7 @@ pub async fn start_instance_process(
             }),
     ));
 
-    let shared_child: Arc<Mutex<Option<tokio::process::Child>>> =
-        Arc::new(Mutex::new(Some(child)));
+    let shared_child: Arc<Mutex<Option<tokio::process::Child>>> = Arc::new(Mutex::new(Some(child)));
 
     emit_status(
         app,

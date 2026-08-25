@@ -159,7 +159,15 @@ pub async fn start_create_instance_task(
     let worker_task_id = task_id.clone();
     tauri::async_runtime::spawn(async move {
         let state = worker_app.state::<AppState>();
-        run_create_instance_task(&worker_app, &state, &worker_task_id, &name, &version, &home_id).await;
+        run_create_instance_task(
+            &worker_app,
+            &state,
+            &worker_task_id,
+            &name,
+            &version,
+            &home_id,
+        )
+        .await;
     });
 
     Ok(task_id)
@@ -209,7 +217,14 @@ pub async fn cancel_task(
             let _ = c.kill().await;
         }
     }
-    emit_progress(&app, &id, TaskState::Cancelled, 0, Some("已取消".to_string()), None);
+    emit_progress(
+        &app,
+        &id,
+        TaskState::Cancelled,
+        0,
+        Some("已取消".to_string()),
+        None,
+    );
     Ok(())
 }
 
@@ -229,9 +244,20 @@ async fn run_create_instance_task(
     // is the actual HOME record created (inside do_create_instance).
     let reserved = {
         let tasks = state.tasks.lock().await;
-        tasks.get(task_id).and_then(|t| t.reserved_home_path.clone())
+        tasks
+            .get(task_id)
+            .and_then(|t| t.reserved_home_path.clone())
     };
-    let result = do_create_instance(app, state, task_id, name, version, home_id, reserved.as_deref()).await;
+    let result = do_create_instance(
+        app,
+        state,
+        task_id,
+        name,
+        version,
+        home_id,
+        reserved.as_deref(),
+    )
+    .await;
 
     let mut tasks = state.tasks.lock().await;
     if let Some(task) = tasks.get_mut(task_id) {
@@ -251,7 +277,14 @@ async fn run_create_instance_task(
                 task.state = TaskState::Error;
                 task.message = Some(msg.clone());
                 push_log_locked(task, &format!("error: {msg}"));
-                emit_progress(app, task_id, TaskState::Error, task.percent, Some(msg), None);
+                emit_progress(
+                    app,
+                    task_id,
+                    TaskState::Error,
+                    task.percent,
+                    Some(msg),
+                    None,
+                );
             }
         }
     }
@@ -508,8 +541,7 @@ async fn install_version_streamed(
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let shared_child: Arc<Mutex<Option<tokio::process::Child>>> =
-        Arc::new(Mutex::new(Some(child)));
+    let shared_child: Arc<Mutex<Option<tokio::process::Child>>> = Arc::new(Mutex::new(Some(child)));
 
     // Expose the child for cancellation.
     {
@@ -553,7 +585,9 @@ async fn install_version_streamed(
                 }
                 let state = app2.state::<AppState>();
                 let mut tasks = state.tasks.lock().await;
-                let Some(task) = tasks.get_mut(&tid) else { break };
+                let Some(task) = tasks.get_mut(&tid) else {
+                    break;
+                };
                 if task.state != TaskState::Running {
                     break;
                 }
@@ -679,7 +713,10 @@ async fn ensure_pnpm(
 
     let local = local_pnpm_path(&tools_dir);
     if !local.exists() {
-        return Err(format!("pnpm 安装完成但未找到可执行文件: {}", local.display()));
+        return Err(format!(
+            "pnpm 安装完成但未找到可执行文件: {}",
+            local.display()
+        ));
     }
     Ok(local)
 }

@@ -1,6 +1,6 @@
 use crate::config::{
-    new_id, sanitize_name, DshHome, DshInstance, DshVersion, LauncherSettings,
-    NewInstanceInput, RemoteVersion, SettingsPatch,
+    new_id, sanitize_name, DshHome, DshInstance, DshVersion, LauncherSettings, NewInstanceInput,
+    RemoteVersion, SettingsPatch,
 };
 use crate::{process, AppState};
 use std::collections::BTreeMap;
@@ -104,20 +104,22 @@ pub fn list_versions(state: State<'_, AppState>) -> Result<Vec<DshVersion>, Stri
 #[tauri::command]
 pub async fn fetch_available_versions() -> Result<Vec<RemoteVersion>, String> {
     let versions_json = run_npm_view("@deepseek-ai/dsh", "versions").await?;
-    let versions: Vec<String> = serde_json::from_str(&versions_json)
-        .map_err(|e| format!("解析版本列表失败: {e}"))?;
+    let versions: Vec<String> =
+        serde_json::from_str(&versions_json).map_err(|e| format!("解析版本列表失败: {e}"))?;
 
     let time_json = run_npm_view("@deepseek-ai/dsh", "time").await?;
     // npm >= 9 returns `time` as `[{ "created": ..., "<version>": "<date>" }]`
     // (array wrapping one object); older npm returned the object directly.
-    let time_map: BTreeMap<String, serde_json::Value> = match serde_json::from_str::<BTreeMap<String, serde_json::Value>>(&time_json) {
-        Ok(map) => map,
-        Err(_) => {
-            let arr: Vec<BTreeMap<String, serde_json::Value>> = serde_json::from_str(&time_json)
-                .map_err(|e| format!("解析发布时间失败: {e}"))?;
-            arr.into_iter().next().unwrap_or_default()
-        }
-    };
+    let time_map: BTreeMap<String, serde_json::Value> =
+        match serde_json::from_str::<BTreeMap<String, serde_json::Value>>(&time_json) {
+            Ok(map) => map,
+            Err(_) => {
+                let arr: Vec<BTreeMap<String, serde_json::Value>> =
+                    serde_json::from_str(&time_json)
+                        .map_err(|e| format!("解析发布时间失败: {e}"))?;
+                arr.into_iter().next().unwrap_or_default()
+            }
+        };
 
     let mut out = Vec::with_capacity(versions.len());
     for v in versions {
@@ -216,7 +218,11 @@ pub fn update_instance(
         return Err("实例名称不能为空".to_string());
     }
     let mut cfg = state.config.lock().unwrap();
-    if cfg.instances.iter().any(|i| i.name == name && i.id != input.id) {
+    if cfg
+        .instances
+        .iter()
+        .any(|i| i.name == name && i.id != input.id)
+    {
         return Err("同名实例已存在".to_string());
     }
     if !cfg.versions.iter().any(|v| v.id == input.version_id) {
@@ -299,7 +305,7 @@ pub fn create_profile(
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
-        return Err("Profile 名称只能包含字母、数字、-、_、." .to_string());
+        return Err("Profile 名称只能包含字母、数字、-、_、.".to_string());
     }
 
     let profiles_dir = {
@@ -372,7 +378,9 @@ pub async fn stop_instance(
 }
 
 #[tauri::command]
-pub async fn list_instance_status(state: State<'_, AppState>) -> Result<Vec<crate::config::InstanceStatus>, String> {
+pub async fn list_instance_status(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::config::InstanceStatus>, String> {
     Ok(process::list_statuses(&state).await)
 }
 
@@ -426,11 +434,7 @@ pub fn update_settings(
         if v != prev {
             use tauri_plugin_autostart::ManagerExt;
             let mgr = app.autolaunch();
-            let result = if v {
-                mgr.enable()
-            } else {
-                mgr.disable()
-            };
+            let result = if v { mgr.enable() } else { mgr.disable() };
             if let Err(e) = result {
                 // Revert the stored flag so the UI stays truthful.
                 cfg.settings.autostart = prev;
@@ -508,6 +512,9 @@ pub async fn fetch_news(source: String) -> Result<String, String> {
 
 // ---------------------------------------------------------------------------
 
-pub(crate) fn save_state(state: &State<'_, AppState>, cfg: &crate::config::Config) -> Result<(), String> {
+pub(crate) fn save_state(
+    state: &State<'_, AppState>,
+    cfg: &crate::config::Config,
+) -> Result<(), String> {
     crate::config::save_config(&state.config_path, cfg)
 }

@@ -168,10 +168,7 @@ pub fn cleanup_orphan_homes(cfg: &mut Config) {
     let orphans: Vec<String> = cfg
         .homes
         .iter()
-        .filter(|h| {
-            !h.path.exists()
-                && !cfg.instances.iter().any(|i| i.home_id == h.id)
-        })
+        .filter(|h| !h.path.exists() && !cfg.instances.iter().any(|i| i.home_id == h.id))
         .map(|h| h.id.clone())
         .collect();
     if orphans.is_empty() {
