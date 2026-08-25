@@ -197,6 +197,7 @@ async function onHeaderMouseDown(e: MouseEvent) {
   gap: 12px;
   flex: 1;
   min-width: 0;
+  height: 100%;
 }
 
 .header-back-btn {
@@ -299,9 +300,13 @@ async function onHeaderMouseDown(e: MouseEvent) {
 
 .app-menu {
   flex: 1;
+  // Keep transparent so the header's border-bottom shows through below the
+  // menu instead of being covered by a menu background.
+  background: transparent;
   border-bottom: none;
 
   :deep(.arco-menu-inner) {
+    background: transparent;
     border-bottom: none;
   }
 }
