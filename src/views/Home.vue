@@ -1,17 +1,35 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
-import { marked } from 'marked'
+import { Marked } from 'marked'
+import markedAlert from 'marked-alert'
+import markedFootnote from 'marked-footnote'
+import markedKatex from 'marked-katex-extension'
 import DOMPurify from 'dompurify'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
+import 'katex/dist/katex.min.css'
+
+const marked = new Marked({ gfm: true, breaks: true })
+  .use(markedAlert())
+  .use(markedFootnote())
+  .use(markedKatex({ throwOnError: false }))
+
+// marked-alert only matches UPPERCASE alert types, while GitHub treats
+// `[!note]`/`[!Note]` the same as `[!NOTE]`. Normalize the type to uppercase
+// before parsing so all casings render as alerts.
+const ALERT_RE = /^(\s*>+\s*)\[!([a-z]+)]/gim
+function normalizeAlerts(md: string): string {
+  return md.replace(ALERT_RE, (_m, prefix: string, type: string) => `${prefix}[!${type.toUpperCase()}]`)
+}
 
 // News links always open in a new window (the system browser on desktop)
-// instead of navigating the launcher itself.
+// instead of navigating the launcher itself. Internal anchors (#footnote-…)
+// must stay in-page so footnote jumps work.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  if (node.tagName === 'A') {
+  if (node.tagName === 'A' && !(node.getAttribute('href') ?? '').startsWith('#')) {
     node.setAttribute('target', '_blank')
     node.setAttribute('rel', 'noopener noreferrer')
   }
@@ -20,10 +38,12 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 /** Renders md (GFM + inline HTML) or raw HTML, sanitized against XSS. */
 function renderNews(content: string, source: string): string {
   const isHtml = /\.html?([?#].*)?$/i.test(source)
-  const raw = isHtml ? content : (marked.parse(content, { gfm: true, breaks: true }) as string)
+  const raw = isHtml ? content : (marked.parse(normalizeAlerts(content)) as string)
   return DOMPurify.sanitize(raw, {
     USE_PROFILES: { html: true },
-    FORBID_TAGS: ['style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'button'],
+    ADD_TAGS: ['input', 'section'],
+    ADD_ATTR: ['type', 'checked', 'disabled', 'id', 'data-footnote-ref', 'data-footnote-backref', 'aria-describedby', 'aria-label'],
+    FORBID_TAGS: ['style', 'iframe', 'object', 'embed', 'form', 'textarea', 'select', 'button'],
     FORBID_ATTR: ['srcset'],
   })
 }
@@ -119,6 +139,65 @@ async function loadNews() {
 }
 
 watch(newsSource, () => loadNews())
+
+// --- Mermaid diagrams --------------------------------------------------------
+// Renders ```mermaid blocks inside the news DOM after it is inserted. The
+// heavy mermaid module is loaded lazily on first use.
+
+let mermaidApi: typeof import('mermaid').default | null = null
+
+async function renderMermaidBlocks(root: HTMLElement) {
+  const blocks = root.querySelectorAll<HTMLElement>('pre > code.language-mermaid')
+  if (!blocks.length) return
+  if (!mermaidApi) {
+    mermaidApi = (await import('mermaid')).default
+    mermaidApi.initialize({
+      startOnLoad: false,
+      theme: document.body.getAttribute('arco-theme') === 'dark' ? 'dark' : 'default',
+      securityLevel: 'strict',
+    })
+  }
+  let i = 0
+  for (const code of blocks) {
+    const pre = code.parentElement as HTMLElement | null
+    if (!pre) continue
+    const text = code.textContent ?? ''
+    i += 1
+    try {
+      const id = `mermaid-${Date.now()}-${i}`
+      const { svg } = await mermaidApi.render(id, text)
+      pre.outerHTML = svg
+    } catch {
+      // Keep the raw code block on failure so the source stays visible.
+      code.classList.remove('language-mermaid')
+      code.classList.add('language-text')
+    }
+  }
+}
+
+watch(newsHtml, async () => {
+  await nextTick()
+  const root = document.querySelector<HTMLElement>('.news-body')
+  if (root) await renderMermaidBlocks(root)
+})
+
+// Footnote / in-page anchor jumps: the content scrolls inside an a-scrollbar,
+// so native `href="#id"` navigation does nothing. Intercept and scroll the
+// scroll container manually.
+function onNewsClick(e: MouseEvent) {
+  const target = (e.target as HTMLElement | null)?.closest('a[href^="#"]') as HTMLAnchorElement | null
+  if (!target) return
+  e.preventDefault()
+  const id = target.getAttribute('href')!.slice(1)
+  const el = document.getElementById(id)
+  if (!el) return
+  const container = document.querySelector<HTMLElement>('.news-area .arco-scrollbar-container')
+  if (!container) return
+  const containerTop = container.getBoundingClientRect().top
+  const top = container.scrollTop + el.getBoundingClientRect().top - containerTop
+  container.scrollTo({ top, behavior: 'smooth' })
+  history.replaceState(null, '', `#${id}`)
+}
 
 watch(
   () => store.instances,
@@ -303,7 +382,7 @@ function goEditSelected() {
         <a-button size="mini" @click="loadNews">{{ t('common.refresh') }}</a-button>
       </div>
       <a-scrollbar v-else outer-style="height: 100%" style="height: 100%; overflow-y: auto">
-        <article class="news-body" v-html="newsHtml"></article>
+        <article class="news-body" v-html="newsHtml" @click="onNewsClick"></article>
       </a-scrollbar>
     </section>
   </div>
@@ -484,6 +563,17 @@ function goEditSelected() {
     margin: 8px 0;
   }
 
+  // Task-list checkboxes (GitHub 风格)
+  :deep(li) {
+    list-style: none;
+
+    input[type='checkbox'] {
+      margin-right: 6px;
+      vertical-align: -2px;
+      accent-color: rgb(var(--primary-6));
+    }
+  }
+
   :deep(a) {
     color: rgb(var(--primary-6));
     text-decoration: none;
@@ -522,6 +612,78 @@ function goEditSelected() {
     background: var(--color-fill-1);
     color: var(--color-text-2);
     border-radius: 0 6px 6px 0;
+  }
+
+  // GitHub-style alerts: > [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]
+  :deep(.markdown-alert) {
+    margin: 12px 0;
+    padding: 10px 14px;
+    border: 1px solid;
+    border-radius: 6px;
+    font-size: 13.5px;
+
+    .markdown-alert-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0 0 6px;
+      font-weight: 600;
+
+      svg {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+      }
+    }
+
+    p {
+      margin: 4px 0;
+    }
+  }
+
+  :deep(.markdown-alert-note) {
+    border-color: rgb(var(--primary-6));
+    background: rgb(var(--primary-6) / 6%);
+
+    .markdown-alert-title {
+      color: rgb(var(--primary-6));
+    }
+  }
+
+  :deep(.markdown-alert-tip) {
+    border-color: rgb(var(--green-6));
+    background: rgb(var(--green-6) / 6%);
+
+    .markdown-alert-title {
+      color: rgb(var(--green-6));
+    }
+  }
+
+  :deep(.markdown-alert-important) {
+    border-color: rgb(var(--purple-6));
+    background: rgb(var(--purple-6) / 6%);
+
+    .markdown-alert-title {
+      color: rgb(var(--purple-6));
+    }
+  }
+
+  :deep(.markdown-alert-warning) {
+    border-color: rgb(var(--orange-6));
+    background: rgb(var(--orange-6) / 6%);
+
+    .markdown-alert-title {
+      color: rgb(var(--orange-6));
+    }
+  }
+
+  :deep(.markdown-alert-caution) {
+    border-color: rgb(var(--red-6));
+    background: rgb(var(--red-6) / 6%);
+
+    .markdown-alert-title {
+      color: rgb(var(--red-6));
+    }
   }
 
   :deep(table) {
