@@ -46,7 +46,7 @@ pub struct LauncherSettings {
     #[serde(default)]
     pub last_instance_id: Option<String>,
     /// News feed source: an http(s) URL or a local .md/.html file path.
-    #[serde(default)]
+    #[serde(default = "default_news_source")]
     pub news_source: String,
     /// UI theme: "light" | "dark" | "system" (follow the OS setting).
     #[serde(default = "default_theme")]
@@ -65,6 +65,10 @@ fn default_theme() -> String {
     "system".to_string()
 }
 
+fn default_news_source() -> String {
+    "https://gist.githubusercontent.com/Gu-ZT/f08daa33afb82f4b375e604039b92742/raw/DSH_NEWS.md".to_string()
+}
+
 impl Default for LauncherSettings {
     fn default() -> Self {
         Self {
@@ -72,7 +76,7 @@ impl Default for LauncherSettings {
             minimize_to_tray: default_true(),
             autostart: false,
             last_instance_id: None,
-            news_source: String::new(),
+            news_source: default_news_source(),
             theme: default_theme(),
         }
     }
@@ -157,6 +161,7 @@ pub fn load_config(path: &Path) -> Config {
                 dedupe_homes(&mut cfg);
                 cleanup_orphan_homes(&mut cfg);
                 ensure_user_dsh_home(&mut cfg);
+                migrate_news_source(&mut cfg);
                 cfg
             }
             Err(err) => {
@@ -167,6 +172,16 @@ pub fn load_config(path: &Path) -> Config {
             }
         },
         Err(_) => Config::default(),
+    }
+}
+
+/// Backfills an empty (previously unset) news_source with the default feed,
+/// so existing users also get the default news URL without being forced to
+/// change a value they explicitly cleared. An explicitly cleared value is
+/// indistinguishable from "never set", so this only runs once when empty.
+fn migrate_news_source(cfg: &mut Config) {
+    if cfg.settings.news_source.trim().is_empty() {
+        cfg.settings.news_source = default_news_source();
     }
 }
 

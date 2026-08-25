@@ -35,7 +35,7 @@ export const useLauncherStore = defineStore('launcher', {
       minimize_to_tray: true,
       autostart: false,
       last_instance_id: null,
-      news_source: '',
+      news_source: 'https://gist.githubusercontent.com/Gu-ZT/f08daa33afb82f4b375e604039b92742/raw/DSH_NEWS.md',
       theme: 'system',
     },
     statusById: {},
