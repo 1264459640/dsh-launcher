@@ -382,7 +382,7 @@ async fn ensure_web_profile_template(
     }
 
     let bin = crate::process::version_bin(&version.dir);
-    if !bin.exists() {
+    if !crate::process::version_bin_ready(&version.dir) {
         return Err(format!(
             "版本 {} 安装不完整（缺少 {}）",
             version.version,

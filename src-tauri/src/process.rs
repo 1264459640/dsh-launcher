@@ -66,6 +66,25 @@ pub fn version_bin(version_dir: &std::path::Path) -> PathBuf {
         .join("bin.js")
 }
 
+/// Checks that a version's bin.js is present and readable. On Windows, pnpm
+/// hard-links store files into the version tree and a transient filesystem
+/// state (antivirus scan, indexer, post-install flush) can make `exists()`
+/// return false once; retry briefly before declaring the install broken.
+pub fn version_bin_ready(version_dir: &std::path::Path) -> bool {
+    let bin = version_bin(version_dir);
+    for _ in 0..5 {
+        if bin.exists() {
+            if let Ok(meta) = std::fs::metadata(&bin) {
+                if meta.len() > 0 {
+                    return true;
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    bin.exists()
+}
+
 /// Builds the effective environment for an instance: DSH_HOME (from the
 /// instance's home), the launcher marker, then the user's overrides
 /// (DSH_HOME is reserved and never overridden).
@@ -118,7 +137,7 @@ pub async fn start_instance_process(
         .ok_or_else(|| "实例引用的 DSH 版本未安装".to_string())?;
 
     let bin = version_bin(&version.dir);
-    if !bin.exists() {
+    if !version_bin_ready(&version.dir) {
         return Err(format!(
             "版本 {} 安装不完整（缺少 {}），请重新安装",
             version.version,
