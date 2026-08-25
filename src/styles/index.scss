@@ -25,7 +25,10 @@ body {
     system-ui,
     -apple-system,
     sans-serif;
-  background-color: var(--color-fill-2);
+  // Use --color-bg-1 (solid): --color-fill-2 is a translucent white in dark
+  // mode, which would render near-white over the browser's default white
+  // body background instead of the intended dark page background.
+  background-color: var(--color-bg-1);
   color: var(--color-text-1);
 }
 
