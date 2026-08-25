@@ -139,6 +139,8 @@ pub fn load_config(path: &Path) -> Config {
         Ok(raw) => match serde_json::from_str::<Config>(&raw) {
             Ok(mut cfg) => {
                 dedupe_homes(&mut cfg);
+                cleanup_orphan_homes(&mut cfg);
+                ensure_user_dsh_home(&mut cfg);
                 cfg
             }
             Err(err) => {
@@ -150,6 +152,49 @@ pub fn load_config(path: &Path) -> Config {
         },
         Err(_) => Config::default(),
     }
+}
+
+/// Removes HOME records whose directory no longer exists AND that are not
+/// referenced by any instance (a stale placeholder from an interrupted task
+/// or a manually deleted folder). Directories that still exist are kept even
+/// if unreferenced (they may be user-managed).
+pub fn cleanup_orphan_homes(cfg: &mut Config) {
+    let orphans: Vec<String> = cfg
+        .homes
+        .iter()
+        .filter(|h| {
+            !h.path.exists()
+                && !cfg.instances.iter().any(|i| i.home_id == h.id)
+        })
+        .map(|h| h.id.clone())
+        .collect();
+    if orphans.is_empty() {
+        return;
+    }
+    cfg.homes.retain(|h| !orphans.contains(&h.id));
+}
+
+/// If the user's home directory contains a `.dsh` folder, make sure a HOME
+/// record points at it so it can be picked as a DSH_HOME and referenced by
+/// instances. Idempotent.
+pub fn ensure_user_dsh_home(cfg: &mut Config) {
+    let home_dir = std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .map(std::path::PathBuf::from);
+    let Some(home_dir) = home_dir else { return };
+    let dsh = home_dir.join(".dsh");
+    if !dsh.exists() {
+        return;
+    }
+    if cfg.homes.iter().any(|h| paths_equal(&h.path, &dsh)) {
+        return;
+    }
+    cfg.homes.push(DshHome {
+        id: "home-user-dsh".to_string(),
+        name: "用户默认 (~/.dsh)".to_string(),
+        path: dsh,
+    });
 }
 
 /// Case-insensitive path equality (Windows filesystems are case-insensitive).

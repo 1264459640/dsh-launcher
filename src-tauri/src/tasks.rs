@@ -33,6 +33,11 @@ pub struct TaskInfo {
     pub message: Option<String>,
     pub instance_id: Option<String>,
     pub instance_name: Option<String>,
+    /// Reserved dedicated HOME path while the task is running; the actual
+    /// HOME record is only created when the instance is created, so a
+    /// cancelled/failed task never leaves an orphan HOME. Not serialized.
+    #[serde(skip)]
+    pub reserved_home_path: Option<std::path::PathBuf>,
     pub logs: Vec<String>,
     #[serde(skip)]
     pub child: Option<Arc<Mutex<Option<tokio::process::Child>>>>,
@@ -84,20 +89,17 @@ pub async fn start_create_instance_task(
         return Err("版本号不能为空".to_string());
     }
 
-    // Resolve the DSH_HOME upfront so the task only needs the final id.
-    let resolved_home_id = {
-        if dedicated {
-            let path = state
-                .data_dir
-                .join("homes")
-                .join(crate::config::sanitize_name(&name))
-                .to_string_lossy()
-                .to_string();
-            let home = crate::commands::create_home_record(&state, &name, &path)?;
-            home.id
-        } else {
-            home_id.ok_or_else(|| "请选择 DSH_HOME".to_string())?
-        }
+    // Dedicated HOME: reserve the path now (placeholder) but do NOT create the
+    // HOME record yet — it is created only once the instance is actually made,
+    // so a failed/cancelled task leaves no orphan HOME behind.
+    let reserved_home_path: Option<std::path::PathBuf> = if dedicated {
+        let path = state
+            .data_dir
+            .join("homes")
+            .join(crate::config::sanitize_name(&name));
+        Some(path)
+    } else {
+        None
     };
 
     // Validate early so a doomed task is never enqueued.
@@ -106,19 +108,30 @@ pub async fn start_create_instance_task(
         if cfg.instances.iter().any(|i| i.name == name) {
             return Err("同名实例已存在".to_string());
         }
-        if !cfg.homes.iter().any(|h| h.id == resolved_home_id) {
-            return Err("DSH_HOME 不存在".to_string());
+        // For a non-dedicated task the chosen HOME must exist already.
+        if !dedicated {
+            if let Some(hid) = &home_id {
+                if !cfg.homes.iter().any(|h| h.id == *hid) {
+                    return Err("DSH_HOME 不存在".to_string());
+                }
+            }
         }
     }
-    // Also reject a running/pending task that will create the same instance
-    // name once it finishes (prevents duplicate name submissions).
+    // Reject a running/pending task that will create the same instance name
+    // once it finishes (prevents duplicate name submissions).
+    // Also reject two running tasks reserving the same dedicated HOME path.
     {
         let tasks = state.tasks.lock().await;
         for task in tasks.values() {
-            if task.state == TaskState::Running
-                && task.instance_name.as_deref() == Some(name.as_str())
-            {
-                return Err("同名实例的下载任务已在进行中".to_string());
+            if task.state == TaskState::Running {
+                if task.instance_name.as_deref() == Some(name.as_str()) {
+                    return Err("同名实例的下载任务已在进行中".to_string());
+                }
+                if let (Some(a), Some(b)) = (&task.reserved_home_path, &reserved_home_path) {
+                    if crate::config::paths_equal(a, b) {
+                        return Err("该专属 DSH_HOME 已被其他下载任务占用".to_string());
+                    }
+                }
             }
         }
     }
@@ -134,6 +147,7 @@ pub async fn start_create_instance_task(
         message: None,
         instance_id: None,
         instance_name: Some(name.clone()),
+        reserved_home_path,
         logs: Vec::new(),
         child: None,
     };
@@ -145,7 +159,7 @@ pub async fn start_create_instance_task(
     let worker_task_id = task_id.clone();
     tauri::async_runtime::spawn(async move {
         let state = worker_app.state::<AppState>();
-        run_create_instance_task(&worker_app, &state, &worker_task_id, &name, &version, &resolved_home_id).await;
+        run_create_instance_task(&worker_app, &state, &worker_task_id, &name, &version, &home_id).await;
     });
 
     Ok(task_id)
@@ -209,9 +223,15 @@ async fn run_create_instance_task(
     task_id: &str,
     name: &str,
     version: &str,
-    home_id: &str,
+    home_id: &Option<String>,
 ) {
-    let result = do_create_instance(app, state, task_id, name, version, home_id).await;
+    // The dedicated HOME path is read from the task's reservation; only then
+    // is the actual HOME record created (inside do_create_instance).
+    let reserved = {
+        let tasks = state.tasks.lock().await;
+        tasks.get(task_id).and_then(|t| t.reserved_home_path.clone())
+    };
+    let result = do_create_instance(app, state, task_id, name, version, home_id, reserved.as_deref()).await;
 
     let mut tasks = state.tasks.lock().await;
     if let Some(task) = tasks.get_mut(task_id) {
@@ -223,6 +243,8 @@ async fn run_create_instance_task(
                 task.state = TaskState::Done;
                 task.percent = 100;
                 task.instance_id = Some(instance_id.clone());
+                // The dedicated HOME now exists for real; release the placeholder.
+                task.reserved_home_path = None;
                 emit_progress(app, task_id, TaskState::Done, 100, None, Some(instance_id));
             }
             Err(msg) => {
@@ -241,7 +263,8 @@ async fn do_create_instance(
     task_id: &str,
     name: &str,
     version: &str,
-    home_id: &str,
+    home_id: &Option<String>,
+    reserved_home_path: Option<&std::path::Path>,
 ) -> Result<String, String> {
     // 1. Install the version if missing.
     let version_record = {
@@ -253,17 +276,34 @@ async fn do_create_instance(
         None => install_version_streamed(app, state, task_id, version).await?,
     };
 
-    // 2. Create the instance record.
+    // 2. Resolve the actual DSH_HOME: for a dedicated task, create the HOME
+    //    record now (path-based reuse keeps it idempotent); otherwise the
+    //    caller-provided HOME id must already exist.
+    let resolved_home_id = match home_id {
+        Some(hid) => hid.clone(),
+        None => {
+            let path = reserved_home_path
+                .ok_or_else(|| "缺少专属 DSH_HOME 路径".to_string())?
+                .to_string_lossy()
+                .to_string();
+            crate::commands::create_home_record(state, name, &path)?.id
+        }
+    };
+
+    // 3. Create the instance record.
     let inst = {
         let mut cfg = state.config.lock().unwrap();
         if cfg.instances.iter().any(|i| i.name == name) {
             return Err("同名实例已存在".to_string());
         }
+        if !cfg.homes.iter().any(|h| h.id == resolved_home_id) {
+            return Err("DSH_HOME 不存在".to_string());
+        }
         let inst = DshInstance {
             id: new_id("i"),
             name: name.to_string(),
             version_id: version_record.id.clone(),
-            home_id: home_id.to_string(),
+            home_id: resolved_home_id,
             env_overrides: Default::default(),
             default_profile: None,
             last_profile: None,

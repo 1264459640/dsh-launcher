@@ -39,8 +39,8 @@ function seedDb(): MockDb {
       { id: 'h-lab', name: '实验室环境', path: 'D:\\dsh-homes\\lab' },
     ],
     versions: [
-      { id: 'v-rc6', version: '0.1.0-rc.6', dir: 'C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\versions\\0.1.0-rc.6' },
-      { id: 'v-rc5', version: '0.1.0-rc.5', dir: 'C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\versions\\0.1.0-rc.5' },
+      { id: 'v-rc6', version: '0.1.0-rc.6', dir: 'C:\\Users\\Administrator\\AppData\\Roaming\\in.dsh-plug.dsh-launcher\\versions\\0.1.0-rc.6' },
+      { id: 'v-rc5', version: '0.1.0-rc.5', dir: 'C:\\Users\\Administrator\\AppData\\Roaming\\in.dsh-plug.dsh-launcher\\versions\\0.1.0-rc.5' },
     ],
     instances: [
       {
@@ -139,7 +139,7 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
     case 'default_dedicated_home_path': {
       const name = String(args?.name ?? 'instance')
       const safe = name.replace(/[^\w一-龥.-]+/g, '_')
-      return `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\homes\\${safe}` as T
+      return `C:\\Users\\Administrator\\AppData\\Roaming\\in.dsh-plug.dsh-launcher\\homes\\${safe}` as T
     }
     case 'create_home': {
       const name = String(args?.name ?? '').trim()
@@ -178,22 +178,16 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         fail('同名实例的下载任务已在进行中')
       }
 
-      let homeId = homeIdArg
+      // Dedicated HOME is only materialized when the task finishes, mirroring
+      // the real backend's placeholder semantics.
+      let dedicatedPath: string | null = null
       if (dedicated) {
         const safe = name.replace(/[^\w一-龥.-]+/g, '_')
-        const path = `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\homes\\${safe}`
-        const existing = db.homes.find(
-          (h) => h.path.replace(/\\/g, '/').toLowerCase() === path.replace(/\\/g, '/').toLowerCase(),
-        )
-        if (existing) {
-          homeId = existing.id
-        } else {
-          const home: DshHome = { id: mockNewId('h'), name, path }
-          db.homes.push(home)
-          homeId = home.id
-        }
+        dedicatedPath = `C:\\Users\\Administrator\\AppData\\Roaming\\in.dsh-plug.dsh-launcher\\homes\\${safe}`
       }
-      if (!homeId || !db.homes.some((h) => h.id === homeId)) fail('请选择 DSH_HOME')
+      if (!dedicated && (!homeIdArg || !db.homes.some((h) => h.id === homeIdArg))) {
+        fail('请选择 DSH_HOME')
+      }
 
       const task: TaskInfo = {
         id: mockNewId('t'),
@@ -235,14 +229,28 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
           return
         }
         clearInterval(timer)
-        // Install version record if missing.
         const cur = loadDb()
+        // Resolve the HOME now (dedicated HOME is created at completion time).
+        let resolvedHomeId = homeIdArg
+        if (dedicated && dedicatedPath) {
+          const existing = cur.homes.find(
+            (h) => h.path.replace(/\\/g, '/').toLowerCase() === dedicatedPath!.replace(/\\/g, '/').toLowerCase(),
+          )
+          if (existing) {
+            resolvedHomeId = existing.id
+          } else {
+            const home: DshHome = { id: mockNewId('h'), name, path: dedicatedPath! }
+            cur.homes.push(home)
+            resolvedHomeId = home.id
+          }
+        }
+        // Install version record if missing.
         let ver = cur.versions.find((v) => v.version === version)
         if (!ver) {
           ver = {
             id: mockNewId('v'),
             version,
-            dir: `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\versions\\${version}`,
+            dir: `C:\\Users\\Administrator\\AppData\\Roaming\\in.dsh-plug.dsh-launcher\\versions\\${version}`,
           }
           cur.versions.push(ver)
         }
@@ -250,7 +258,7 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
           id: mockNewId('i'),
           name,
           version_id: ver.id,
-          home_id: homeId!,
+          home_id: resolvedHomeId!,
           env_overrides: {},
           default_profile: null,
           last_profile: null,
