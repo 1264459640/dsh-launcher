@@ -46,7 +46,7 @@ pub fn node() -> &'static str {
     "node"
 }
 
-pub fn version_bin(version_dir: &PathBuf) -> PathBuf {
+pub fn version_bin(version_dir: &std::path::Path) -> PathBuf {
     version_dir
         .join("node_modules")
         .join("@deepseek-ai")

@@ -169,7 +169,7 @@ pub async fn start_create_instance_task(
 pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<TaskInfo>, String> {
     let tasks = state.tasks.lock().await;
     let mut out: Vec<TaskInfo> = tasks.values().cloned().collect();
-    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    out.sort_by_key(|t| std::cmp::Reverse(t.created_at));
     Ok(out)
 }
 

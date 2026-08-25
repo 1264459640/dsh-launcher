@@ -1,0 +1,171 @@
+name: CI and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  quality:
+    name: Quality (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux
+          - runner: windows-latest
+            platform: windows
+          - runner: macos-14
+            platform: macos
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install native prerequisites
+        shell: bash
+        run: ./ci/install-${{ matrix.platform }}.sh
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.platform }}-quality
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked
+      - name: Frontend build
+        run: pnpm build
+
+  integration:
+    name: Integration checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # This project has no container-backed protocol tests; the isolated
+      # Linux job runs the release-note classifier tests and the manifest
+      # synchronization check instead.
+      - name: Version synchronization
+        run: node ci/check-versions.mjs
+      - name: Release-note classifier tests
+        run: node --test ci/release-notes.test.mjs
+
+  prepare:
+    needs: [quality, integration]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      changelog_version: ${{ steps.release.outputs.changelog_version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve idempotent release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./ci/resolve-release.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_RUN_NUMBER"
+
+  build:
+    name: Package (${{ matrix.target }})
+    needs: prepare
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            cache_key: windows-x86_64
+            bundle_args: --bundles nsis,msi
+          - platform: linux
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            cache_key: linux-x86_64
+            bundle_args: --bundles appimage,deb,rpm
+          - platform: linux
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            cache_key: linux-aarch64
+            bundle_args: --bundles appimage,deb
+          - platform: macos
+            runner: macos-14
+            target: aarch64-apple-darwin
+            cache_key: macos-aarch64
+            bundle_args: --bundles dmg
+          - platform: macos
+            runner: macos-13
+            target: x86_64-apple-darwin
+            cache_key: macos-x86_64
+            bundle_args: --bundles dmg
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install platform prerequisites
+        shell: bash
+        run: ./ci/install-${{ matrix.platform }}.sh
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.cache_key }}-release
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Package and upload
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          args: --target ${{ matrix.target }} ${{ matrix.bundle_args }}
+
+  update-release-notes:
+    name: Update release notes
+    needs: [prepare, build]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Render bilingual changelog and downloads table
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          ./ci/update-release-notes.sh \
+            "${{ needs.prepare.outputs.release_id }}" \
+            "${{ needs.prepare.outputs.tag }}" \
+            "${{ needs.prepare.outputs.changelog_version }}" \
+            "${{ needs.prepare.outputs.prerelease }}"

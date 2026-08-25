@@ -265,5 +265,5 @@ pub fn sanitize_name(name: &str) -> String {
 }
 
 pub fn new_id(prefix: &str) -> String {
-    format!("{prefix}-{}", uuid::Uuid::new_v4().to_string())
+    format!("{prefix}-{}", uuid::Uuid::new_v4())
 }

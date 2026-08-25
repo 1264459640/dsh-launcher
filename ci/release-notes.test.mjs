@@ -1,0 +1,62 @@
+// Release-note classifier/linking tests.
+// Run: node --test ci/release-notes.test.mjs
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { classify, render } from './release-notes-render.mjs'
+
+const TAG = 'v0.1.0-dev.42'
+const REPO = 'acme/dsh-launcher'
+
+const EN = '## [0.1.0] - 2026-08-25\n\nFirst release.'
+const ZH = '## [0.1.0] - 2026-08-25\n\n初始版本。'
+
+const ASSETS = [
+  'dsh-launcher_0.1.0_x64-setup.exe',
+  'dsh-launcher_0.1.0_x64_en-US.msi',
+  'dsh-launcher_0.1.0_amd64.AppImage',
+  'dsh-launcher_0.1.0_amd64.deb',
+  'dsh-launcher_0.1.0_amd64.rpm',
+  'dsh-launcher_0.1.0_aarch64.AppImage',
+  'dsh-launcher_0.1.0_aarch64.deb',
+  'dsh-launcher_0.1.0_aarch64.dmg',
+  'dsh-launcher_0.1.0_x64.dmg',
+]
+
+test('classifier maps known artifact names to platform/arch/kind', () => {
+  const expected = {
+    'dsh-launcher_0.1.0_x64-setup.exe': { arch: 'x86_64', kind: 'exe' },
+    'dsh-launcher_0.1.0_x64_en-US.msi': { arch: 'x86_64', kind: 'msi' },
+    'dsh-launcher_0.1.0_amd64.AppImage': { arch: 'x86_64', kind: 'AppImage' },
+    'dsh-launcher_0.1.0_aarch64.deb': { arch: 'arm64', kind: 'deb' },
+    'dsh-launcher_0.1.0_x64.dmg': { arch: 'x86_64', kind: 'dmg' },
+  }
+  for (const [name, exp] of Object.entries(expected)) {
+    const c = classify(name)
+    assert.ok(c, `expected ${name} to classify`)
+    assert.equal(c.arch, exp.arch)
+    assert.equal(c.kind, exp.kind)
+  }
+})
+
+test('classifier rejects unknown or non-artifact files', () => {
+  for (const bad of ['README.md', 'dsh-launcher_0.1.0_amd64.exe.blockmap', 'totally-unrelated.zip']) {
+    assert.equal(classify(bad), null, `${bad} must not classify`)
+  }
+})
+
+test('every artifact row is a clickable link to the release asset URL', () => {
+  const body = render(TAG, ASSETS, EN, ZH, { repo: REPO })
+  for (const name of ASSETS) {
+    const url = `https://github.com/${REPO}/releases/download/${TAG}/${name}`
+    const row = new RegExp(`\\| [^|]+ \\| [^|]+ \\| \\[${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\(${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`)
+    assert.match(body, row, `expected a clickable row for ${name}`)
+  }
+})
+
+test('rendered sections contain both changelogs', () => {
+  const body = render(TAG, ASSETS, EN, ZH, { repo: REPO })
+  assert.ok(body.includes('First release.'))
+  assert.ok(body.includes('初始版本。'))
+  assert.ok(body.includes('### English'))
+  assert.ok(body.includes('### 简体中文'))
+})
