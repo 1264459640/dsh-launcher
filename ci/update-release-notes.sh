@@ -12,7 +12,9 @@ REPO="${GITHUB_REPOSITORY:?}"
 GH_TOKEN="${GH_TOKEN:?}"
 
 # All uploaded assets; fail early if any name does not match the classifier.
-ASSETS_JSON="$(gh release view "$TAG" --repo "$REPO" --json assets -q '[.assets[].name]' | jq -c .)"
+# Fetch by numeric release id (REST) — `gh release view` resolves tag -> node_id
+# for draft releases, and tag lookup 404s on untagged drafts.
+ASSETS_JSON="$(gh api "repos/$REPO/releases/$RELEASE_ID" --jq '[.assets[].name]' | jq -c .)"
 
 EN_CHANGELOG="$(awk -v ver="$CHANGELOG_VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1} f {print} f && $0 ~ "^## \\[" && $0 !~ "^## \\[" ver "\\]" {exit}' CHANGELOG.md)"
 ZH_CHANGELOG="$(awk -v ver="$CHANGELOG_VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1} f {print} f && $0 ~ "^## \\[" && $0 !~ "^## \\[" ver "\\]" {exit}' CHANGELOG.zh_CN.md)"

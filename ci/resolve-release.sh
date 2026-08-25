@@ -36,13 +36,16 @@ fi
 
 # Find an existing release for this tag (draft or not) so a re-run of the
 # same run number reuses it instead of creating a duplicate.
-EXISTING_ID="$(gh release view "$TAG" --repo "$REPO" --json id -q .id 2>/dev/null || true)"
+# Use the REST API (numeric id) — `gh release view --json id` returns the
+# node_id (RE_...) for untagged draft releases, which tauri-action then
+# parses as NaN and falls back to its tag-lookup path.
+EXISTING_ID="$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" 2>/dev/null | head -n 1 || true)"
 if [[ -n "$EXISTING_ID" ]]; then
   RELEASE_ID="$EXISTING_ID"
   echo "reusing existing release $RELEASE_ID ($TAG)"
 else
   gh release create "$TAG" --repo "$REPO" --draft --prerelease="$PRERELEASE" --title "$TAG" --notes "Preparing artifacts…" >/dev/null
-  RELEASE_ID="$(gh release view "$TAG" --repo "$REPO" --json id -q .id)"
+  RELEASE_ID="$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)"
   echo "created release $RELEASE_ID ($TAG)"
 fi
 
