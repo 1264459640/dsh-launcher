@@ -38,13 +38,39 @@ const selectedKeys = computed(() => {
 function onMenuSelect(key: string) {
   router.push({ name: key })
 }
+
+const appWindow = (() => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (window as any)?.__TAURI_INTERNALS__ ? loadWindowApi() : null
+})()
+
+async function loadWindowApi() {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  return getCurrentWindow()
+}
+
+async function minimize() {
+  const w = await appWindow
+  w?.minimize()
+}
+
+async function close() {
+  const w = await appWindow
+  if (!w) return
+  if (store.settings.minimize_to_tray) {
+    w.hide()
+  } else {
+    w.destroy()
+  }
+}
 </script>
 
 <template>
   <a-layout class="app-shell">
-    <a-layout-header class="app-header">
-      <div class="app-brand">
-        <span class="app-logo">⚡</span>
+    <a-layout-header class="app-header" data-tauri-drag-region>
+      <!-- Brand doubles as the drag region (native decorations are off). -->
+      <div class="app-brand" data-tauri-drag-region>
+        <img src="@/assets/launcher-icon.png" class="app-logo" alt="" data-tauri-drag-region />
         <span class="app-title">{{ t('app.title') }}</span>
         <a-tag v-if="!isTauri" size="small" color="orange">{{ t('app.mockBadge') }}</a-tag>
       </div>
@@ -52,12 +78,21 @@ function onMenuSelect(key: string) {
         mode="horizontal"
         :selected-keys="selectedKeys"
         class="app-menu"
+        data-tauri-drag-region="false"
         @menu-item-click="onMenuSelect"
       >
         <a-menu-item key="home">{{ t('nav.home') }}</a-menu-item>
         <a-menu-item key="download">{{ t('nav.download') }}</a-menu-item>
         <a-menu-item key="settings">{{ t('nav.settings') }}</a-menu-item>
       </a-menu>
+      <div class="window-controls" data-tauri-drag-region="false">
+        <button class="wc-btn" title="最小化" @click="minimize">
+          <svg viewBox="0 0 12 12" width="12" height="12"><line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.4"/></svg>
+        </button>
+        <button class="wc-btn wc-close" title="关闭" @click="close">
+          <svg viewBox="0 0 12 12" width="12" height="12"><path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor" stroke-width="1.4"/></svg>
+        </button>
+      </div>
     </a-layout-header>
     <a-layout-content>
       <router-view />
@@ -93,15 +128,49 @@ function onMenuSelect(key: string) {
   gap: 8px;
   margin-right: 32px;
   white-space: nowrap;
+  height: 100%;
+  cursor: default;
 
   .app-logo {
-    font-size: 20px;
+    width: 24px;
+    height: 24px;
+    border-radius: 5px;
+    object-fit: cover;
   }
 
   .app-title {
     font-size: 16px;
     font-weight: 600;
   }
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: -12px;
+}
+
+.wc-btn {
+  width: 42px;
+  height: var(--dl-header-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-2);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-fill-2);
+    color: var(--color-text-1);
+  }
+}
+
+.wc-close:hover {
+  background: #e81123;
+  color: #fff;
 }
 
 .app-menu {

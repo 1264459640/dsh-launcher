@@ -289,6 +289,19 @@ async fn do_create_instance(
             crate::commands::create_home_record(state, name, &path)?.id
         }
     };
+    let home_path = {
+        let cfg = state.config.lock().unwrap();
+        cfg.homes
+            .iter()
+            .find(|h| h.id == resolved_home_id)
+            .ok_or_else(|| "DSH_HOME 不存在".to_string())?
+            .path
+            .clone()
+    };
+
+    // 2.5. Ensure the default web profile exists and a `__temp__` template
+    // copy is created, so later profiles can be derived from it.
+    ensure_web_profile_template(app, state, task_id, &home_path, &version_record).await?;
 
     // 3. Create the instance record.
     let inst = {
@@ -313,6 +326,141 @@ async fn do_create_instance(
         inst
     };
     Ok(inst.id)
+}
+
+/// Ensures the default `web` profile exists in the given DSH_HOME and that a
+/// `__temp__` copy (the template later profiles are derived from) is present.
+/// If the template is missing, it boots the installed DSH with
+/// `--profile web --port <random>`, waits for the web URL (meaning the profile
+/// was materialized), terminates it, then copies `profiles/web` to
+/// `profiles/__temp__`. The profile for a fresh HOME is created the first time
+/// a DSH process runs with that HOME, so this is a one-time cost per HOME.
+async fn ensure_web_profile_template(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+    home_path: &std::path::Path,
+    version: &DshVersion,
+) -> Result<(), String> {
+    let profiles = home_path.join("profiles");
+    let temp_dir = profiles.join("__temp__");
+    if temp_dir.exists() {
+        return Ok(());
+    }
+
+    let bin = crate::process::version_bin(&version.dir);
+    if !bin.exists() {
+        return Err(format!(
+            "版本 {} 安装不完整（缺少 {}）",
+            version.version,
+            bin.display()
+        ));
+    }
+
+    let port = 20000 + rand_port_offset();
+    let msg = format!("正在初始化 web profile（端口 {port}）…");
+    push_task_log(app, state, task_id, &msg).await;
+
+    let mut child = tokio::process::Command::new(crate::process::node())
+        .arg(&bin)
+        .arg("--profile")
+        .arg("web")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .env("DSH_HOME", home_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 DSH 生成 profile 失败: {e}"))?;
+
+    // Wait for the web URL to appear (profile has been created), then stop it.
+    let mut timer = tokio::time::interval(std::time::Duration::from_millis(300));
+    let mut attempts = 0;
+    let mut ready = false;
+    if let Some(out) = child.stdout.take() {
+        let mut reader = BufReader::new(out).lines();
+        loop {
+            tokio::select! {
+                line = reader.next_line() => {
+                    match line {
+                        Ok(Some(l)) => {
+                            let l = l.trim().to_string();
+                            if !l.is_empty() {
+                                push_task_log(app, state, task_id, &l).await;
+                            }
+                            if l.contains("dsh web: http") {
+                                ready = true;
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                _ = timer.tick() => {
+                    attempts += 1;
+                    if attempts > 200 { break; } // ~60s safety cap
+                }
+            }
+        }
+    }
+
+    // Take ownership of the child handle to kill it (we already removed stdout).
+    let _ = child.stderr.take();
+    child.kill().await.ok();
+
+    if !ready {
+        return Err("生成 web profile 超时或失败".to_string());
+    }
+
+    // Copy profiles/web → profiles/__temp__.
+    let web_dir = profiles.join("web");
+    if !web_dir.exists() {
+        return Err("web profile 目录未生成".to_string());
+    }
+    copy_dir(&web_dir, &temp_dir).map_err(|e| format!("复制 __temp__ profile 失败: {e}"))?;
+    push_task_log(app, state, task_id, "web profile 模板 __temp__ 已创建").await;
+    Ok(())
+}
+
+/// Simple deterministic-ish port offset so multiple homes don't collide often.
+fn rand_port_offset() -> u16 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    (nanos % 30000) as u16
+}
+
+async fn push_task_log(app: &AppHandle, state: &State<'_, AppState>, task_id: &str, line: &str) {
+    let mut tasks = state.tasks.lock().await;
+    if let Some(task) = tasks.get_mut(task_id) {
+        // Cap the retained log (mirrors stream_pipe's MAX_LOG_LINES).
+        if task.logs.len() >= MAX_LOG_LINES {
+            task.logs.remove(0);
+        }
+        task.logs.push(line.to_string());
+    }
+    emit_log(app, task_id, line);
+}
+
+/// Recursively copies a directory tree (files only, directories preserved).
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir(&from, &to)?;
+        } else if ty.is_file() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Runs `pnpm install --loglevel=http` for the given version, streaming every

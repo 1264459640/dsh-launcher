@@ -147,7 +147,7 @@ function goEditSelected() {
     <!-- Left launch panel -->
     <aside class="launch-panel">
       <div class="identity-block">
-        <div class="instance-avatar">⚡</div>
+        <div class="instance-avatar"><img src="@/assets/launcher-icon.png" alt="" /></div>
         <div class="instance-name">{{ selectedInstance?.name ?? '—' }}</div>
         <a-tag
           v-if="selectedStatus"
@@ -297,9 +297,15 @@ function goEditSelected() {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 40px;
+  overflow: hidden;
   box-shadow: 0 6px 16px rgb(22 93 255 / 25%);
   user-select: none;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
 }
 
 .instance-name {
