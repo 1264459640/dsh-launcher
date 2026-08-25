@@ -75,7 +75,7 @@ async function onRemoveHome(id: string) {
 const homeColumns = computed(() => [
   { title: t('settings.homeName'), dataIndex: 'name', width: 180 },
   { title: t('settings.homePath'), dataIndex: 'path', ellipsis: true, tooltip: true },
-  { title: t('home.table.actions'), slotName: 'actions', width: 110, align: 'center' as const },
+  { title: t('instances.table.actions'), slotName: 'actions', width: 110, align: 'center' as const },
 ])
 </script>
 

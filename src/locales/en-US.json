@@ -4,7 +4,8 @@
     "mockBadge": "Browser preview mode"
   },
   "nav": {
-    "home": "Home",
+    "home": "Launch",
+    "instances": "Instances",
     "versions": "Versions",
     "plugins": "Plugins",
     "settings": "Settings"
@@ -18,33 +19,39 @@
     "starting": "Starting…",
     "openWindow": "Open window",
     "stop": "Stop",
-    "runningAt": "Running at",
-    "instanceList": "Instances",
-    "newInstance": "New instance",
-    "goVersions": "Download versions",
-    "emptyTitle": "No instances yet",
-    "emptyDesc": "Create an instance to get started: pick a DSH version, a DSH_HOME and a profile.",
-    "sharedHomeWarning": "Instances sharing one DSH_HOME also share sessions and configuration.",
-    "table": {
-      "name": "Name",
-      "version": "Version",
-      "home": "DSH_HOME",
-      "status": "Status",
-      "actions": "Actions",
-      "edit": "Settings",
-      "delete": "Delete"
-    },
+    "editSelected": "Instance settings",
+    "instanceList": "Instance list",
+    "sharedHome": "Shared DSH_HOME",
+    "sharedHomeWarning": "This instance shares its DSH_HOME with other instances; sessions and configuration are shared.",
+    "newsPlaceholder": "N E W S",
     "status": {
       "stopped": "Stopped",
       "starting": "Starting",
       "running": "Running",
       "exited": "Exited"
     },
-    "confirmDelete": "Delete instance \"{name}\"?",
-    "deleted": "Instance deleted",
     "started": "Start command sent",
     "stopped": "Instance stopped",
     "noProfile": "No profile available under this instance's DSH_HOME"
+  },
+  "instances": {
+    "title": "Instances",
+    "newInstance": "New instance",
+    "goVersions": "Download versions",
+    "emptyTitle": "No instances yet",
+    "emptyDesc": "Create an instance to get started: pick a DSH version, a DSH_HOME and a profile.",
+    "deleted": "Instance deleted",
+    "confirmDelete": "Delete instance \"{name}\"?",
+    "table": {
+      "name": "Name",
+      "version": "Version",
+      "home": "DSH_HOME",
+      "profile": "Profile",
+      "status": "Status",
+      "actions": "Actions",
+      "edit": "Settings",
+      "delete": "Delete"
+    }
   },
   "versions": {
     "title": "Versions",

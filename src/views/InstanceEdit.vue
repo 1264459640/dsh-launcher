@@ -190,7 +190,7 @@ function removeEnvRow(idx: number) {
         />
         <a-input v-model="row.value" :placeholder="t('instanceEdit.envValue')" class="env-value" />
         <a-button status="danger" type="text" @click="removeEnvRow(idx)">
-          {{ t('home.table.delete') }}
+          {{ t('instances.table.delete') }}
         </a-button>
         <div v-if="envKeyError(row)" class="env-error">{{ envKeyError(row) }}</div>
       </div>

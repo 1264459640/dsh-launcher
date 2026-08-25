@@ -4,7 +4,8 @@
     "mockBadge": "浏览器预览模式"
   },
   "nav": {
-    "home": "主页",
+    "home": "启动",
+    "instances": "实例",
     "versions": "版本下载",
     "plugins": "插件下载",
     "settings": "设置"
@@ -18,33 +19,39 @@
     "starting": "启动中…",
     "openWindow": "打开窗口",
     "stop": "停止",
-    "runningAt": "运行于",
+    "editSelected": "实例设置",
     "instanceList": "实例列表",
-    "newInstance": "新建实例",
-    "goVersions": "版本下载",
-    "emptyTitle": "还没有实例",
-    "emptyDesc": "创建一个实例开始：选择 DSH 版本、DSH_HOME 与 Profile。",
-    "sharedHomeWarning": "多个实例共用同一 DSH_HOME 时会共享会话与配置数据。",
-    "table": {
-      "name": "名称",
-      "version": "版本",
-      "home": "DSH_HOME",
-      "status": "状态",
-      "actions": "操作",
-      "edit": "设置",
-      "delete": "删除"
-    },
+    "sharedHome": "共享 DSH_HOME",
+    "sharedHomeWarning": "该实例与其他实例共用同一 DSH_HOME，会话与配置数据将被共享。",
+    "newsPlaceholder": "新 闻 区 域",
     "status": {
       "stopped": "已停止",
       "starting": "启动中",
       "running": "运行中",
       "exited": "已退出"
     },
-    "confirmDelete": "确定删除实例「{name}」？",
-    "deleted": "实例已删除",
     "started": "实例启动命令已发送",
     "stopped": "实例已停止",
     "noProfile": "该实例的 DSH_HOME 下没有可用 Profile"
+  },
+  "instances": {
+    "title": "实例列表",
+    "newInstance": "新建实例",
+    "goVersions": "版本下载",
+    "emptyTitle": "还没有实例",
+    "emptyDesc": "创建一个实例开始：选择 DSH 版本、DSH_HOME 与 Profile。",
+    "deleted": "实例已删除",
+    "confirmDelete": "确定删除实例「{name}」？",
+    "table": {
+      "name": "名称",
+      "version": "版本",
+      "home": "DSH_HOME",
+      "profile": "Profile",
+      "status": "状态",
+      "actions": "操作",
+      "edit": "设置",
+      "delete": "删除"
+    }
   },
   "versions": {
     "title": "版本下载",

@@ -5,6 +5,7 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/', name: 'home', component: () => import('@/views/Home.vue') },
+    { path: '/instances', name: 'instances', component: () => import('@/views/Instances.vue') },
     { path: '/versions', name: 'versions', component: () => import('@/views/Versions.vue') },
     { path: '/plugins', name: 'plugins', component: () => import('@/views/Plugins.vue') },
     { path: '/settings', name: 'settings', component: () => import('@/views/Settings.vue') },

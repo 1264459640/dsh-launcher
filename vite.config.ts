@@ -25,6 +25,10 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: {
+      // Editor/atomic-save temp directories must not be watched (EBUSY on Windows).
+      ignored: ['**/.*/**', '**/.*.tmpdir/**'],
+    },
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
