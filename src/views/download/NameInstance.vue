@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -63,6 +63,8 @@ async function onConfirm() {
       dedicated.value ? null : homeId.value!,
       dedicated.value,
     )
+    // Pull the task list so the task page shows the new task immediately.
+    await store.refreshTasks()
     Message.success(t('download.taskAdded'))
     router.push({ name: 'tasks' })
   } catch (e) {

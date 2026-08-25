@@ -84,6 +84,21 @@ export const useLauncherStore = defineStore('launcher', {
           existing.percent = p.percent
           existing.message = p.message
           existing.instance_id = p.instance_id
+        } else {
+          // Event arrived before the task list did: seed a minimal entry so
+          // the task manager never misses a just-created task.
+          this.tasks[p.id] = {
+            id: p.id,
+            kind: 'create-instance',
+            label: '',
+            version: '',
+            state: p.state,
+            percent: p.percent,
+            created_at: Date.now(),
+            message: p.message,
+            instance_id: p.instance_id,
+            logs: [],
+          }
         }
         // A create-instance task finished: refresh instance/version lists.
         if (p.state === 'done' && p.instance_id) {

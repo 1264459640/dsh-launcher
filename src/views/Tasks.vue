@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
@@ -13,6 +13,11 @@ const store = useLauncherStore()
 
 const expanded = ref<Record<string, boolean>>({})
 const logRefs = ref<Record<string, HTMLElement | null>>({})
+
+onMounted(() => {
+  // Refresh once on entry so tasks created before navigation are present.
+  store.refreshTasks()
+})
 
 function stateColor(state: TaskState): string {
   switch (state) {
@@ -41,6 +46,10 @@ watch(
   () => store.tasks,
   () => {
     for (const task of store.taskList) {
+      // Auto-expand newly arrived running tasks.
+      if (task.state === 'running' && expanded.value[task.id] === undefined) {
+        expanded.value[task.id] = true
+      }
       if (expanded.value[task.id]) scrollToBottom(task.id)
     }
   },
