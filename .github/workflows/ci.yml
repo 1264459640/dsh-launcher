@@ -162,6 +162,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Full history is required to collect commits since the previous tag.
+          fetch-depth: 0
       - name: Render downloads table and commit list
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

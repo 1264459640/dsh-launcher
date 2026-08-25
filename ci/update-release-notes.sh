@@ -19,8 +19,13 @@ GH_TOKEN="${GH_TOKEN:?}"
 # for draft releases, and tag lookup 404s on untagged drafts.
 ASSETS_JSON="$(gh api "repos/$REPO/releases/$RELEASE_ID" --jq '[.assets[].name]' | jq -c .)"
 
-# Make sure all tags are present (actions/checkout uses a shallow clone).
-git fetch --tags --force --quiet
+# Make sure the full history (not just the shallow HEAD) and all tags are
+# present so `git log <prev>..HEAD` can traverse back to the previous tag.
+if git rev-parse --is-shallow-repository | grep -q true; then
+  git fetch --unshallow --tags --force --quiet
+else
+  git fetch --tags --force --quiet
+fi
 
 # Same-kind tags: prerelease tags are v<ver>-dev.<n>, release tags are plain
 # v<ver> (no "-dev." suffix).
