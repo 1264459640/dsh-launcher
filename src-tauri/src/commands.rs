@@ -295,19 +295,7 @@ pub fn create_profile(
     name: String,
 ) -> Result<String, String> {
     let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err("Profile 名称不能为空".to_string());
-    }
-    if name == "__temp__" || name == "node_modules" {
-        return Err(format!("「{name}」为保留名称，不能使用"));
-    }
-    // Basic name hygiene: only letters, digits, dash, underscore, dot.
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-    {
-        return Err("Profile 名称只能包含字母、数字、-、_、.".to_string());
-    }
+    validate_profile_name(&name)?;
 
     let profiles_dir = {
         let cfg = state.config.lock().unwrap();
@@ -330,6 +318,122 @@ pub fn create_profile(
 
     copy_dir_recursive(&temp_dir, &target).map_err(|e| format!("创建 Profile 失败: {e}"))?;
     Ok(name)
+}
+
+/// Validates a profile name (shared by create/rename).
+fn validate_profile_name(name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Profile 名称不能为空".to_string());
+    }
+    if name == "__temp__" || name == "node_modules" {
+        return Err(format!("「{name}」为保留名称，不能使用"));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err("Profile 名称只能包含字母、数字、-、_、.".to_string());
+    }
+    Ok(())
+}
+
+/// Renames a profile directory inside the given HOME.
+#[tauri::command(rename_all = "snake_case")]
+pub fn rename_profile(
+    state: State<'_, AppState>,
+    home_id: String,
+    old_name: String,
+    new_name: String,
+) -> Result<String, String> {
+    validate_profile_name(&new_name)?;
+    let new_name = new_name.trim().to_string();
+
+    let profiles_dir = {
+        let cfg = state.config.lock().unwrap();
+        let home = cfg
+            .homes
+            .iter()
+            .find(|h| h.id == home_id)
+            .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+        home.path.join("profiles")
+    };
+
+    let from = profiles_dir.join(&old_name);
+    if !from.is_dir() {
+        return Err(format!("Profile「{old_name}」不存在"));
+    }
+    let to = profiles_dir.join(&new_name);
+    if to.exists() {
+        return Err(format!("Profile「{new_name}」已存在"));
+    }
+
+    std::fs::rename(&from, &to).map_err(|e| format!("重命名 Profile 失败: {e}"))?;
+
+    // Keep the instance's default/last profile references in sync.
+    {
+        let mut cfg = state.config.lock().unwrap();
+        for inst in cfg.instances.iter_mut() {
+            if inst.home_id == home_id {
+                if inst.default_profile.as_deref() == Some(old_name.as_str()) {
+                    inst.default_profile = Some(new_name.clone());
+                }
+                if inst.last_profile.as_deref() == Some(old_name.as_str()) {
+                    inst.last_profile = Some(new_name.clone());
+                }
+            }
+        }
+        save_state(&state, &cfg)?;
+    }
+
+    Ok(new_name)
+}
+
+/// Deletes a profile directory inside the given HOME. The default/last profile
+/// references on instances using this HOME are cleared when they point at the
+/// removed profile.
+#[tauri::command(rename_all = "snake_case")]
+pub fn delete_profile(
+    state: State<'_, AppState>,
+    home_id: String,
+    name: String,
+) -> Result<(), String> {
+    let profiles_dir = {
+        let cfg = state.config.lock().unwrap();
+        let home = cfg
+            .homes
+            .iter()
+            .find(|h| h.id == home_id)
+            .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+        home.path.join("profiles")
+    };
+
+    let target = profiles_dir.join(&name);
+    if !target.is_dir() {
+        return Err(format!("Profile「{name}」不存在"));
+    }
+    if name == "__temp__" || name == "node_modules" {
+        return Err(format!("「{name}」为保留名称，不能删除"));
+    }
+
+    std::fs::remove_dir_all(&target).map_err(|e| format!("删除 Profile 失败: {e}"))?;
+
+    {
+        let mut cfg = state.config.lock().unwrap();
+        for inst in cfg.instances.iter_mut() {
+            if inst.home_id == home_id {
+                if inst.default_profile.as_deref() == Some(name.as_str()) {
+                    inst.default_profile = None;
+                }
+                if inst.last_profile.as_deref() == Some(name.as_str()) {
+                    inst.last_profile = None;
+                }
+            }
+        }
+        save_state(&state, &cfg)?;
+    }
+
+    Ok(())
 }
 
 /// Recursively copies a directory tree.

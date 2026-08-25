@@ -371,6 +371,52 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       mockProfiles[homeId].push(name)
       return name as T
     }
+    case 'rename_profile': {
+      const homeId = String(args?.home_id)
+      const oldName = String(args?.old_name ?? '')
+      const newName = String(args?.new_name ?? '').trim()
+      if (!newName) fail('Profile 名称不能为空')
+      if (newName === '__temp__' || newName === 'node_modules') fail(`「${newName}」为保留名称，不能使用`)
+      if (!/^[A-Za-z0-9._-]+$/.test(newName)) fail('Profile 名称只能包含字母、数字、-、_、.')
+      const home = db.homes.find((h) => h.id === homeId)
+      const base: string[] = []
+      if (home && home.path.endsWith('.dsh')) base.push(...['web', 'demo', 'pack'])
+      mockProfiles[homeId] = mockProfiles[homeId] ?? []
+      const exists = (n: string) => base.includes(n) || mockProfiles[homeId].includes(n)
+      if (!exists(oldName)) fail(`Profile「${oldName}」不存在`)
+      if (exists(newName)) fail(`Profile「${newName}」已存在`)
+      const idx = mockProfiles[homeId].indexOf(oldName)
+      if (idx >= 0) mockProfiles[homeId][idx] = newName
+      // Keep instance references in sync.
+      for (const inst of db.instances) {
+        if (inst.home_id === homeId) {
+          if (inst.default_profile === oldName) inst.default_profile = newName
+          if (inst.last_profile === oldName) inst.last_profile = newName
+        }
+      }
+      saveDb(db)
+      return newName as T
+    }
+    case 'delete_profile': {
+      const homeId = String(args?.home_id)
+      const name = String(args?.name ?? '')
+      if (name === '__temp__' || name === 'node_modules') fail(`「${name}」为保留名称，不能删除`)
+      const home = db.homes.find((h) => h.id === homeId)
+      const base: string[] = []
+      if (home && home.path.endsWith('.dsh')) base.push(...['web', 'demo', 'pack'])
+      mockProfiles[homeId] = mockProfiles[homeId] ?? []
+      const exists = (n: string) => base.includes(n) || mockProfiles[homeId].includes(n)
+      if (!exists(name)) fail(`Profile「${name}」不存在`)
+      mockProfiles[homeId] = mockProfiles[homeId].filter((n) => n !== name)
+      for (const inst of db.instances) {
+        if (inst.home_id === homeId) {
+          if (inst.default_profile === name) inst.default_profile = null
+          if (inst.last_profile === name) inst.last_profile = null
+        }
+      }
+      saveDb(db)
+      return undefined as T
+    }
     case 'start_instance': {
       const id = String(args?.id)
       const profile = String(args?.profile)
@@ -469,6 +515,10 @@ export const api = {
   listProfiles: (homeId: string) => call<string[]>('list_profiles', { home_id: homeId }),
   createProfile: (homeId: string, name: string) =>
     call<string>('create_profile', { home_id: homeId, name }),
+  renameProfile: (homeId: string, oldName: string, newName: string) =>
+    call<string>('rename_profile', { home_id: homeId, old_name: oldName, new_name: newName }),
+  deleteProfile: (homeId: string, name: string) =>
+    call<void>('delete_profile', { home_id: homeId, name }),
 
   startInstance: (id: string, profile: string) => call<void>('start_instance', { id, profile }),
   stopInstance: (id: string) => call<void>('stop_instance', { id }),

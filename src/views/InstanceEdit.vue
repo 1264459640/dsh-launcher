@@ -15,6 +15,11 @@ const store = useLauncherStore()
 const editingId = computed(() => (route.params.id as string | undefined) ?? null)
 const isNew = computed(() => !editingId.value)
 
+// --- Sidebar tabs ---------------------------------------------------------------
+
+type TabKey = 'basic' | 'env' | 'profiles' | 'plugins'
+const activeTab = ref<TabKey>('basic')
+
 // --- Form state ---------------------------------------------------------------
 
 const name = ref('')
@@ -26,6 +31,7 @@ const defaultProfile = ref<string | undefined>(undefined)
 const profiles = ref<string[]>([])
 const newProfileName = ref('')
 const creatingProfile = ref(false)
+const addingProfile = ref(false)
 const saving = ref(false)
 
 interface EnvRow {
@@ -150,7 +156,7 @@ async function onCreateProfile() {
     await api.createProfile(homeId.value, name)
     profiles.value = await api.listProfiles(homeId.value)
     newProfileName.value = ''
-    defaultProfile.value = name
+    addingProfile.value = false
     Message.success(t('instanceEdit.profileCreated', { name }))
   } catch (e) {
     Message.error(String(e))
@@ -158,113 +164,280 @@ async function onCreateProfile() {
     creatingProfile.value = false
   }
 }
+
+function cancelAddProfile() {
+  addingProfile.value = false
+  newProfileName.value = ''
+}
+
+function setDefaultProfile(name: string) {
+  defaultProfile.value = name
+  Message.success(t('instanceEdit.profileSetDefault', { name }))
+}
+
+// --- Profile rename/delete ------------------------------------------------------
+
+const renamingProfile = ref<string | null>(null)
+const renameValue = ref('')
+const busyProfile = ref<string | null>(null)
+
+function startRenameProfile(name: string) {
+  renamingProfile.value = name
+  renameValue.value = name
+}
+
+function cancelRenameProfile() {
+  renamingProfile.value = null
+  renameValue.value = ''
+}
+
+async function confirmRenameProfile() {
+  if (!homeId.value || !renamingProfile.value) return
+  const oldName = renamingProfile.value
+  const newName = renameValue.value.trim()
+  if (!newName || newName === oldName) {
+    cancelRenameProfile()
+    return
+  }
+  busyProfile.value = oldName
+  try {
+    await api.renameProfile(homeId.value, oldName, newName)
+    profiles.value = await api.listProfiles(homeId.value)
+    cancelRenameProfile()
+    Message.success(t('instanceEdit.profileRenamed', { old: oldName, name: newName }))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    busyProfile.value = null
+  }
+}
+
+async function confirmDeleteProfile(name: string) {
+  if (!homeId.value) return
+  busyProfile.value = name
+  try {
+    await api.deleteProfile(homeId.value, name)
+    profiles.value = await api.listProfiles(homeId.value)
+    if (defaultProfile.value === name) defaultProfile.value = undefined
+    Message.success(t('instanceEdit.profileDeleted', { name }))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    busyProfile.value = null
+  }
+}
 </script>
 
 <template>
-  <div class="dl-page">
-    <div class="dl-card">
-      <div class="dl-card-title">
-        <h3>{{ isNew ? t('instanceEdit.titleNew') : t('instanceEdit.titleEdit') }}</h3>
-      </div>
+  <div class="edit-page">
+    <aside class="edit-sidebar">
+      <a-menu :selected-keys="[activeTab]" @menu-item-click="(key: string) => (activeTab = key as TabKey)">
+        <a-menu-item key="basic">{{ t('instanceEdit.tabs.basic') }}</a-menu-item>
+        <a-menu-item key="env">{{ t('instanceEdit.tabs.env') }}</a-menu-item>
+        <a-menu-item key="profiles">{{ t('instanceEdit.tabs.profiles') }}</a-menu-item>
+        <a-menu-item key="plugins">{{ t('instanceEdit.tabs.plugins') }}</a-menu-item>
+      </a-menu>
+    </aside>
+    <section class="edit-content">
+      <a-scrollbar type="track" outer-style="height: 100%" style="height: 100%; overflow-y: auto">
+        <div class="edit-inner">
+          <!-- Basic settings -->
+          <div v-if="activeTab === 'basic'" class="dl-card edit-card">
+            <a-form layout="vertical" class="edit-form" :model="{}">
+              <a-form-item :label="t('instanceEdit.name')" required>
+                <a-input v-model="name" :placeholder="t('instanceEdit.namePlaceholder')" style="max-width: 360px" />
+              </a-form-item>
 
-      <a-form layout="vertical" class="edit-form" :model="{}">
-        <a-form-item :label="t('instanceEdit.name')" required>
-          <a-input v-model="name" :placeholder="t('instanceEdit.namePlaceholder')" style="max-width: 360px" />
-        </a-form-item>
+              <a-form-item :label="t('instanceEdit.version')" required>
+                <template v-if="store.versions.length">
+                  <a-select v-model="versionId" style="max-width: 360px">
+                    <a-option v-for="v in store.versions" :key="v.id" :value="v.id">{{ v.version }}</a-option>
+                  </a-select>
+                </template>
+                <a-alert v-else type="warning">
+                  {{ t('instanceEdit.noVersion') }}
+                  <a-link @click="router.push({ name: 'download' })">{{ t('instanceEdit.goDownload') }}</a-link>
+                </a-alert>
+              </a-form-item>
 
-        <a-form-item :label="t('instanceEdit.version')" required>
-          <template v-if="store.versions.length">
-            <a-select v-model="versionId" style="max-width: 360px">
-              <a-option v-for="v in store.versions" :key="v.id" :value="v.id">{{ v.version }}</a-option>
-            </a-select>
-          </template>
-          <a-alert v-else type="warning">
-            {{ t('instanceEdit.noVersion') }}
-            <a-link @click="router.push({ name: 'download' })">{{ t('instanceEdit.goDownload') }}</a-link>
-          </a-alert>
-        </a-form-item>
+              <a-form-item :label="t('instanceEdit.home')" required>
+                <a-select v-model="homeId" style="max-width: 360px">
+                  <a-option :value="DEDICATED">{{ t('instanceEdit.dedicatedHome') }}</a-option>
+                  <a-option v-for="h in store.homes" :key="h.id" :value="h.id">
+                    {{ h.name }}（{{ h.path }}）
+                  </a-option>
+                </a-select>
+                <a-alert v-if="homeId === DEDICATED" type="info" class="dedicated-hint">
+                  {{ t('instanceEdit.dedicatedHomeHint', { path: dedicatedPath }) }}
+                </a-alert>
+              </a-form-item>
+            </a-form>
 
-        <a-form-item :label="t('instanceEdit.home')" required>
-          <a-select v-model="homeId" style="max-width: 360px">
-            <a-option :value="DEDICATED">{{ t('instanceEdit.dedicatedHome') }}</a-option>
-            <a-option v-for="h in store.homes" :key="h.id" :value="h.id">
-              {{ h.name }}（{{ h.path }}）
-            </a-option>
-          </a-select>
-          <a-alert v-if="homeId === DEDICATED" type="info" class="dedicated-hint">
-            {{ t('instanceEdit.dedicatedHomeHint', { path: dedicatedPath }) }}
-          </a-alert>
-        </a-form-item>
-
-        <a-form-item :label="t('instanceEdit.defaultProfile')">
-          <div class="profile-row">
-            <div class="profile-select-wrap">
-              <a-select
-                v-model="defaultProfile"
-                :placeholder="t('instanceEdit.defaultProfilePlaceholder')"
-                allow-clear
-                :disabled="!homeId || homeId === DEDICATED"
-              >
-                <a-option v-for="p in profiles" :key="p" :value="p">{{ p }}</a-option>
-              </a-select>
+            <div class="footer-actions">
+              <a-button type="primary" size="large" :disabled="!formValid" :loading="saving" @click="onSave">
+                {{ t('instanceEdit.save') }}
+              </a-button>
+              <a-button size="large" @click="router.push({ name: 'home' })">{{ t('instanceEdit.cancel') }}</a-button>
             </div>
-            <template v-if="homeId && homeId !== DEDICATED">
+          </div>
+
+          <!-- Environment overrides -->
+          <div v-else-if="activeTab === 'env'" class="dl-card edit-card">
+            <h4 class="env-title">{{ t('instanceEdit.env') }}</h4>
+            <p class="env-desc">{{ t('instanceEdit.envDesc') }}</p>
+
+            <div v-for="(row, idx) in envRows" :key="idx" class="env-row">
               <a-input
-                v-model="newProfileName"
-                :placeholder="t('instanceEdit.profileCreatePlaceholder')"
-                class="profile-create-input"
-                @press-enter="onCreateProfile"
+                v-model="row.key"
+                :placeholder="t('instanceEdit.envKey')"
+                :status="envKeyError(row) ? 'error' : undefined"
+                class="env-key"
               />
-              <a-button
-                type="primary"
-                class="profile-create-btn"
-                :loading="creatingProfile"
-                :disabled="!newProfileName.trim()"
-                @click="onCreateProfile"
-              >
-                {{ t('instanceEdit.profileCreate') }}
+              <a-input v-model="row.value" :placeholder="t('instanceEdit.envValue')" class="env-value" />
+              <a-button status="danger" type="text" @click="removeEnvRow(idx)">
+                {{ t('instances.table.delete') }}
+              </a-button>
+              <div v-if="envKeyError(row)" class="env-error">{{ envKeyError(row) }}</div>
+            </div>
+            <a-empty v-if="envRows.length === 0" :description="t('instanceEdit.envAdd')" />
+            <a-button size="small" class="env-add-btn" @click="addEnvRow">{{ t('instanceEdit.envAdd') }}</a-button>
+
+            <div class="footer-actions">
+              <a-button type="primary" size="large" :disabled="!formValid" :loading="saving" @click="onSave">
+                {{ t('instanceEdit.save') }}
+              </a-button>
+              <a-button size="large" @click="router.push({ name: 'home' })">{{ t('instanceEdit.cancel') }}</a-button>
+            </div>
+          </div>
+
+          <!-- Profiles -->
+          <div v-else-if="activeTab === 'profiles'" class="dl-card edit-card">
+            <h4 class="env-title">{{ t('instanceEdit.tabs.profiles') }}</h4>
+            <p class="env-desc">{{ t('instanceEdit.profilesDesc') }}</p>
+
+            <template v-if="homeId && homeId !== DEDICATED">
+              <div v-if="profiles.length === 0" class="profiles-empty">
+                <a-empty :description="t('instanceEdit.profilesEmpty')" />
+              </div>
+
+              <div v-for="p in profiles" :key="p" class="profile-item">
+                <template v-if="renamingProfile === p">
+                  <a-input
+                    v-model="renameValue"
+                    class="profile-item-name"
+                    :status="renameValue.trim() && renameValue.trim() !== p ? undefined : 'error'"
+                    @press-enter="confirmRenameProfile"
+                  />
+                  <a-button size="small" type="primary" :loading="busyProfile === p" @click="confirmRenameProfile">
+                    {{ t('instanceEdit.profileRenameSave') }}
+                  </a-button>
+                  <a-button size="small" @click="cancelRenameProfile">{{ t('instanceEdit.cancel') }}</a-button>
+                </template>
+                <template v-else>
+                  <span class="profile-item-name">
+                    {{ p }}
+                    <a-tag v-if="defaultProfile === p" color="arcoblue" size="small">
+                      {{ t('instanceEdit.profileDefaultTag') }}
+                    </a-tag>
+                  </span>
+                  <span class="profile-item-actions">
+                    <a-button size="small" @click="startRenameProfile(p)">{{ t('instanceEdit.profileRename') }}</a-button>
+                    <a-button
+                      v-if="defaultProfile !== p"
+                      size="small"
+                      type="primary"
+                      @click="setDefaultProfile(p)"
+                    >
+                      {{ t('instanceEdit.profileSetDefaultBtn') }}
+                    </a-button>
+                    <a-popconfirm
+                      :content="t('instanceEdit.profileDeleteConfirm', { name: p })"
+                      @ok="confirmDeleteProfile(p)"
+                    >
+                      <a-button size="small" status="danger" :loading="busyProfile === p">
+                        {{ t('instances.table.delete') }}
+                      </a-button>
+                    </a-popconfirm>
+                  </span>
+                </template>
+              </div>
+
+              <div v-if="addingProfile" class="profile-item">
+                <a-input
+                  v-model="newProfileName"
+                  :placeholder="t('instanceEdit.profileCreatePlaceholder')"
+                  class="profile-item-name"
+                  @press-enter="onCreateProfile"
+                />
+                <a-button size="small" type="primary" :loading="creatingProfile" @click="onCreateProfile">
+                  {{ t('instanceEdit.profileCreate') }}
+                </a-button>
+                <a-button size="small" @click="cancelAddProfile">{{ t('instanceEdit.cancel') }}</a-button>
+              </div>
+
+              <a-button v-if="!addingProfile" size="small" class="profile-add-btn" @click="addingProfile = true">
+                {{ t('instanceEdit.profileAdd') }}
               </a-button>
             </template>
+
+            <a-alert v-else type="info">
+              {{ t('instanceEdit.profilesNeedHome') }}
+            </a-alert>
+
+            <div class="footer-actions">
+              <a-button type="primary" size="large" :disabled="!formValid" :loading="saving" @click="onSave">
+                {{ t('instanceEdit.save') }}
+              </a-button>
+              <a-button size="large" @click="router.push({ name: 'home' })">{{ t('instanceEdit.cancel') }}</a-button>
+            </div>
           </div>
-        </a-form-item>
-      </a-form>
-    </div>
 
-    <div class="dl-card">
-      <div class="dl-card-title">
-        <h3>{{ t('instanceEdit.env') }}</h3>
-        <a-button size="small" @click="addEnvRow">{{ t('instanceEdit.envAdd') }}</a-button>
-      </div>
-      <p class="env-desc">{{ t('instanceEdit.envDesc') }}</p>
-
-      <div v-for="(row, idx) in envRows" :key="idx" class="env-row">
-        <a-input
-          v-model="row.key"
-          :placeholder="t('instanceEdit.envKey')"
-          :status="envKeyError(row) ? 'error' : undefined"
-          class="env-key"
-        />
-        <a-input v-model="row.value" :placeholder="t('instanceEdit.envValue')" class="env-value" />
-        <a-button status="danger" type="text" @click="removeEnvRow(idx)">
-          {{ t('instances.table.delete') }}
-        </a-button>
-        <div v-if="envKeyError(row)" class="env-error">{{ envKeyError(row) }}</div>
-      </div>
-      <a-empty v-if="envRows.length === 0" :description="t('instanceEdit.envAdd')" />
-    </div>
-
-    <div class="footer-actions">
-      <a-button type="primary" size="large" :disabled="!formValid" :loading="saving" @click="onSave">
-        {{ t('instanceEdit.save') }}
-      </a-button>
-      <a-button size="large" @click="router.push({ name: 'home' })">{{ t('instanceEdit.cancel') }}</a-button>
-    </div>
+          <!-- Plugins (coming soon) -->
+          <div v-else class="plugins-soon">
+            <div class="coming-text">{{ t('plugins.coming') }}</div>
+            <div class="coming-desc">{{ t('plugins.desc') }}</div>
+          </div>
+        </div>
+      </a-scrollbar>
+    </section>
   </div>
 </template>
 
 <style lang="scss" scoped>
+.edit-page {
+  display: flex;
+  height: calc(100vh - var(--dl-header-height));
+}
+
+.edit-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: var(--color-bg-2);
+  border-right: 1px solid var(--color-border-2);
+
+  :deep(.arco-menu) {
+    height: 100%;
+  }
+}
+
+.edit-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.edit-inner {
+  padding: 20px 24px 80px;
+}
+
+.edit-card {
+  // Full-width card: stretch to fill the content area like the download page.
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .edit-form {
-  max-width: 640px;
+  width: 100%;
 }
 
 .dedicated-hint {
@@ -272,40 +445,51 @@ async function onCreateProfile() {
   max-width: 360px;
 }
 
-.profile-row {
+.profile-item {
   display: flex;
   gap: 8px;
   align-items: center;
-  width: 100%;
-
-  :deep(.arco-select-view-single) {
-    height: 32px;
-    box-sizing: border-box;
-  }
-
-  :deep(.arco-input-wrapper) {
-    height: 32px;
-    box-sizing: border-box;
-  }
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: var(--color-fill-1);
 }
 
-.profile-select-wrap {
-  width: 200px;
-  flex-shrink: 0;
-}
-
-.profile-create-input {
+.profile-item-name {
   flex: 1;
   min-width: 0;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.profile-create-btn {
+.profile-item-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
   flex-shrink: 0;
-  height: 32px;
+}
+
+.profiles-empty {
+  padding: 8px 0;
+}
+
+.profile-add-btn {
+  margin-top: 4px;
+}
+
+.env-title {
+  margin: 0 0 4px;
+  font-size: 15px;
 }
 
 .env-desc {
-  margin-top: -8px;
+  margin-top: 0;
   color: var(--color-text-3);
   font-size: 13px;
 }
@@ -334,10 +518,62 @@ async function onCreateProfile() {
   font-size: 12px;
 }
 
+.env-add-btn {
+  margin-top: 4px;
+}
+
+.plugins-soon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 420px;
+}
+
+.coming-text {
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  background: linear-gradient(90deg, #165dff, #722ed1, #f53f3f);
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  user-select: none;
+}
+
+.coming-desc {
+  color: var(--color-text-3);
+  font-size: 14px;
+}
+
 .footer-actions {
   margin-top: 20px;
   display: flex;
   gap: 12px;
   justify-content: center;
+}
+
+@media (max-width: 720px) {
+  .edit-page {
+    flex-direction: column;
+  }
+
+  .edit-sidebar {
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border-2);
+
+    :deep(.arco-menu) {
+      height: auto;
+      display: flex;
+      overflow-x: auto;
+    }
+
+    :deep(.arco-menu-item) {
+      white-space: nowrap;
+    }
+  }
 }
 </style>

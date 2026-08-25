@@ -87,6 +87,8 @@ pub fn run() {
             commands::delete_instance,
             commands::list_profiles,
             commands::create_profile,
+            commands::rename_profile,
+            commands::delete_profile,
             commands::start_instance,
             commands::stop_instance,
             commands::list_instance_status,
