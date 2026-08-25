@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
@@ -27,10 +27,26 @@ function suggestName(): string {
 }
 
 const instanceName = ref(suggestName())
-const homeId = ref<string | undefined>(store.homes[0]?.id ?? undefined)
+const DEDICATED = '__dedicated__'
+const homeId = ref<string | undefined>(DEDICATED)
+const dedicatedPath = ref('')
 const busy = ref(false)
 const installing = ref(false)
 const progress = ref(0)
+
+const dedicated = computed(() => homeId.value === DEDICATED)
+
+watch(homeId, async (v) => {
+  if (v === DEDICATED && !dedicatedPath.value) {
+    dedicatedPath.value = await api.defaultDedicatedHomePath(instanceName.value.trim() || version.value)
+  }
+}, { immediate: true })
+
+watch(instanceName, async (v) => {
+  if (dedicated.value) {
+    dedicatedPath.value = await api.defaultDedicatedHomePath(v.trim() || version.value)
+  }
+})
 
 let unlisten: (() => void) | null = null
 
@@ -55,6 +71,14 @@ async function onConfirm() {
   if (!canConfirm.value) return
   busy.value = true
   try {
+    // 0. Resolve the DSH_HOME: create a dedicated one if requested.
+    let resolvedHomeId = homeId.value!
+    if (dedicated.value) {
+      const home = await api.createHome(instanceName.value.trim(), dedicatedPath.value)
+      resolvedHomeId = home.id
+      await store.refreshHomes()
+    }
+
     // 1. Install the DSH version if it is not installed yet.
     if (!installedVersion.value) {
       installing.value = true
@@ -70,7 +94,7 @@ async function onConfirm() {
     const inst = await api.createInstance({
       name: instanceName.value.trim(),
       version_id: ver.id,
-      home_id: homeId.value!,
+      home_id: resolvedHomeId,
       env_overrides: {},
       default_profile: null,
     })
@@ -108,16 +132,14 @@ async function onConfirm() {
       <div class="dl-card-title">
         <h3>{{ t('download.chooseHome') }}</h3>
       </div>
-      <template v-if="store.homes.length">
-        <a-select v-model="homeId" style="width: 100%; max-width: 480px">
-          <a-option v-for="h in store.homes" :key="h.id" :value="h.id">
-            {{ h.name }}（{{ h.path }}）
-          </a-option>
-        </a-select>
-      </template>
-      <a-alert v-else type="warning">
-        {{ t('download.noHome') }}
-        <a-link @click="router.push({ name: 'settings' })">{{ t('download.goSettings') }}</a-link>
+      <a-select v-model="homeId" style="width: 100%; max-width: 480px">
+        <a-option :value="DEDICATED">{{ t('download.dedicatedHome') }}</a-option>
+        <a-option v-for="h in store.homes" :key="h.id" :value="h.id">
+          {{ h.name }}（{{ h.path }}）
+        </a-option>
+      </a-select>
+      <a-alert v-if="dedicated" type="info" class="dedicated-hint">
+        {{ t('download.dedicatedHomeHint', { path: dedicatedPath }) }}
       </a-alert>
     </div>
 
@@ -193,6 +215,11 @@ async function onConfirm() {
 
 .confirm-hint {
   max-width: 520px;
+}
+
+.dedicated-hint {
+  margin-top: 12px;
+  max-width: 480px;
 }
 
 .confirm-progress {

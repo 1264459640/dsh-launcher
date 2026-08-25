@@ -122,6 +122,11 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
   switch (cmd) {
     case 'list_homes':
       return db.homes as T
+    case 'default_dedicated_home_path': {
+      const name = String(args?.name ?? 'instance')
+      const safe = name.replace(/[^\w一-龥.-]+/g, '_')
+      return `C:\\Users\\Administrator\\AppData\\Roaming\\dsh-launcher\\homes\\${safe}` as T
+    }
     case 'create_home': {
       const name = String(args?.name ?? '').trim()
       const path = String(args?.path ?? '').trim()
@@ -284,6 +289,7 @@ export const api = {
   listHomes: () => call<DshHome[]>('list_homes'),
   createHome: (name: string, path: string) => call<DshHome>('create_home', { name, path }),
   removeHome: (id: string) => call<void>('remove_home', { id }),
+  defaultDedicatedHomePath: (name: string) => call<string>('default_dedicated_home_path', { name }),
 
   listVersions: () => call<DshVersion[]>('list_versions'),
   fetchAvailableVersions: () => call<RemoteVersion[]>('fetch_available_versions'),

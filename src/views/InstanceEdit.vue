@@ -19,7 +19,9 @@ const isNew = computed(() => !editingId.value)
 
 const name = ref('')
 const versionId = ref<string | undefined>(undefined)
+const DEDICATED = '__dedicated__'
 const homeId = ref<string | undefined>(undefined)
+const dedicatedPath = ref('')
 const defaultProfile = ref<string | undefined>(undefined)
 const profiles = ref<string[]>([])
 const saving = ref(false)
@@ -59,6 +61,10 @@ onMounted(async () => {
 
 watch(homeId, async (v) => {
   profiles.value = []
+  if (v === DEDICATED) {
+    dedicatedPath.value = await api.defaultDedicatedHomePath(name.value.trim() || 'instance')
+    return
+  }
   if (!v) return
   try {
     profiles.value = await api.listProfiles(v)
@@ -67,6 +73,12 @@ watch(homeId, async (v) => {
     }
   } catch (e) {
     Message.error(String(e))
+  }
+})
+
+watch(name, async (v) => {
+  if (homeId.value === DEDICATED) {
+    dedicatedPath.value = await api.defaultDedicatedHomePath(v.trim() || 'instance')
   }
 })
 
@@ -84,11 +96,18 @@ async function onSave() {
   }
   saving.value = true
   try {
+    // A dedicated DSH_HOME is created on demand for this instance.
+    let resolvedHomeId = homeId.value!
+    if (homeId.value === DEDICATED) {
+      const home = await api.createHome(name.value.trim(), dedicatedPath.value)
+      resolvedHomeId = home.id
+      await store.refreshHomes()
+    }
     if (isNew.value) {
       await api.createInstance({
         name: name.value.trim(),
         version_id: versionId.value!,
-        home_id: homeId.value!,
+        home_id: resolvedHomeId,
         env_overrides: envOverrides,
         default_profile: defaultProfile.value ?? null,
       })
@@ -98,7 +117,7 @@ async function onSave() {
         ...inst,
         name: name.value.trim(),
         version_id: versionId.value!,
-        home_id: homeId.value!,
+        home_id: resolvedHomeId,
         env_overrides: envOverrides,
         default_profile: defaultProfile.value ?? null,
       })
@@ -147,16 +166,14 @@ function removeEnvRow(idx: number) {
         </a-form-item>
 
         <a-form-item :label="t('instanceEdit.home')" required>
-          <template v-if="store.homes.length">
-            <a-select v-model="homeId" style="max-width: 360px">
-              <a-option v-for="h in store.homes" :key="h.id" :value="h.id">
-                {{ h.name }}（{{ h.path }}）
-              </a-option>
-            </a-select>
-          </template>
-          <a-alert v-else type="warning">
-            {{ t('instanceEdit.noHome') }}
-            <a-link @click="router.push({ name: 'settings' })">{{ t('instanceEdit.goSettings') }}</a-link>
+          <a-select v-model="homeId" style="max-width: 360px">
+            <a-option :value="DEDICATED">{{ t('instanceEdit.dedicatedHome') }}</a-option>
+            <a-option v-for="h in store.homes" :key="h.id" :value="h.id">
+              {{ h.name }}（{{ h.path }}）
+            </a-option>
+          </a-select>
+          <a-alert v-if="homeId === DEDICATED" type="info" class="dedicated-hint">
+            {{ t('instanceEdit.dedicatedHomeHint', { path: dedicatedPath }) }}
           </a-alert>
         </a-form-item>
 
@@ -209,6 +226,11 @@ function removeEnvRow(idx: number) {
 <style lang="scss" scoped>
 .edit-form {
   max-width: 560px;
+}
+
+.dedicated-hint {
+  margin-top: 8px;
+  max-width: 360px;
 }
 
 .env-desc {
