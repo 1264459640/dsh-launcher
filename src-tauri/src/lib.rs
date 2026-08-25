@@ -93,6 +93,7 @@ pub fn run() {
             commands::open_instance_window,
             commands::get_settings,
             commands::update_settings,
+            commands::fetch_news,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

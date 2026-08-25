@@ -67,6 +67,7 @@ function seedDb(): MockDb {
       minimize_to_tray: true,
       autostart: false,
       last_instance_id: 'i-main',
+      news_source: '',
     },
     running: {},
   }
@@ -413,6 +414,19 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       return Object.values(db.running) as T
     case 'get_settings':
       return db.settings as T
+    case 'fetch_news': {
+      // Browser preview: return sample markdown instead of fetching.
+      return [
+        '# DSH Launcher 新闻',
+        '',
+        '- 支持 **GFM** 表格、任务列表与`行内代码`',
+        '- 支持 <b>内联 HTML</b>（已过滤 XSS）',
+        '',
+        '| 版本 | 状态 |',
+        '| ---- | ---- |',
+        '| rc.6 | ✅   |',
+      ].join('\n') as T
+    }
     case 'update_settings': {
       db.settings = { ...db.settings, ...(args?.settings as Partial<LauncherSettings>) }
       saveDb(db)
@@ -462,6 +476,7 @@ export const api = {
 
   getSettings: () => call<LauncherSettings>('get_settings'),
   updateSettings: (settings: Partial<LauncherSettings>) => call<LauncherSettings>('update_settings', { settings }),
+  fetchNews: (source: string) => call<string>('fetch_news', { source }),
 
   async onInstanceStatus(cb: Listener<InstanceStatus>): Promise<() => void> {
     if (isTauri) {

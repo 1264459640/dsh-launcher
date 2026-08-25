@@ -45,6 +45,9 @@ pub struct LauncherSettings {
     pub autostart: bool,
     #[serde(default)]
     pub last_instance_id: Option<String>,
+    /// News feed source: an http(s) URL or a local .md/.html file path.
+    #[serde(default)]
+    pub news_source: String,
 }
 
 fn default_locale() -> String {
@@ -62,6 +65,7 @@ impl Default for LauncherSettings {
             minimize_to_tray: default_true(),
             autostart: false,
             last_instance_id: None,
+            news_source: String::new(),
         }
     }
 }
@@ -110,6 +114,8 @@ pub struct SettingsPatch {
     pub autostart: Option<bool>,
     #[serde(default)]
     pub last_instance_id: Option<String>,
+    #[serde(default)]
+    pub news_source: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -22,6 +22,7 @@
     "sharedHome": "共享 DSH_HOME",
     "sharedHomeWarning": "该实例与其他实例共用同一 DSH_HOME，会话与配置数据将被共享。",
     "newsPlaceholder": "新 闻 区 域",
+    "newsLoading": "新闻加载中…",
     "status": {
       "stopped": "已停止",
       "starting": "启动中",
@@ -93,6 +94,9 @@
     "language": "界面语言",
     "minimizeToTray": "关闭主窗口时最小化到系统托盘",
     "autostart": "开机自动启动启动器",
+    "newsSource": "新闻来源",
+    "newsSourcePlaceholder": "https://…/news.md 或本地 .md/.html 文件路径",
+    "newsSourceHint": "支持 Markdown（GFM + 内联 HTML）与 HTML 文件；内容会先经 XSS 过滤再展示在启动页右侧新闻区域，链接在新窗口打开。",
     "saved": "设置已保存",
     "homes": "DSH_HOME 管理",
     "homeName": "名称",

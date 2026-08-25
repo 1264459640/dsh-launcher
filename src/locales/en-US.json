@@ -22,6 +22,7 @@
     "sharedHome": "Shared DSH_HOME",
     "sharedHomeWarning": "This instance shares its DSH_HOME with other instances; sessions and configuration are shared.",
     "newsPlaceholder": "N E W S",
+    "newsLoading": "Loading news…",
     "status": {
       "stopped": "Stopped",
       "starting": "Starting",
@@ -93,6 +94,9 @@
     "language": "Language",
     "minimizeToTray": "Minimize to system tray when closing the main window",
     "autostart": "Launch at login",
+    "newsSource": "News source",
+    "newsSourcePlaceholder": "https://…/news.md or a local .md/.html path",
+    "newsSourceHint": "Markdown (GFM + inline HTML) and HTML are supported; content is XSS-sanitized before being shown in the news area on the home page, and links open in a new window.",
     "saved": "Settings saved",
     "homes": "DSH_HOME management",
     "homeName": "Name",

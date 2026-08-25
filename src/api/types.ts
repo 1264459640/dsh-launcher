@@ -27,6 +27,7 @@ export interface LauncherSettings {
   minimize_to_tray: boolean
   autostart: boolean
   last_instance_id: string | null
+  news_source: string
 }
 
 export type InstanceState = 'stopped' | 'starting' | 'running' | 'exited'

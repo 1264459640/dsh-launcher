@@ -35,6 +35,7 @@ export const useLauncherStore = defineStore('launcher', {
       minimize_to_tray: true,
       autostart: false,
       last_instance_id: null,
+      news_source: '',
     },
     statusById: {},
     tasks: {},

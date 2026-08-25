@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
@@ -30,6 +30,21 @@ async function onTrayChange(value: string | number | boolean | Record<string, un
 
 async function onAutostartChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
   await patchSettings({ autostart: Boolean(value) })
+}
+
+// News source: saved on blur / Enter so typing is not interrupted.
+const newsSource = ref(store.settings.news_source ?? '')
+watch(
+  () => store.settings.news_source,
+  (v) => {
+    if ((v ?? '') !== newsSource.value) newsSource.value = v ?? ''
+  },
+)
+
+async function onNewsSourceSave() {
+  const value = newsSource.value.trim()
+  if (value === (store.settings.news_source ?? '')) return
+  await patchSettings({ news_source: value })
 }
 
 // --- DSH_HOME management ------------------------------------------------------
@@ -105,6 +120,16 @@ const homeColumns = computed(() => [
           <a-switch :model-value="store.settings.autostart" @change="onAutostartChange" />
           <span class="switch-label">{{ t('settings.autostart') }}</span>
         </a-form-item>
+        <a-form-item :label="t('settings.newsSource')">
+          <a-input
+            v-model="newsSource"
+            :placeholder="t('settings.newsSourcePlaceholder')"
+            allow-clear
+            @blur="onNewsSourceSave"
+            @press-enter="onNewsSourceSave"
+          />
+          <p class="news-source-hint">{{ t('settings.newsSourceHint') }}</p>
+        </a-form-item>
       </a-form>
     </div>
 
@@ -144,6 +169,12 @@ const homeColumns = computed(() => [
 .switch-label {
   margin-left: 10px;
   color: var(--color-text-2);
+}
+
+.news-source-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--color-text-3);
 }
 
 .home-add-row {

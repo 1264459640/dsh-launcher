@@ -441,9 +441,69 @@ pub fn update_settings(
     if let Some(v) = settings.last_instance_id {
         cfg.settings.last_instance_id = Some(v);
     }
+    if let Some(v) = settings.news_source {
+        cfg.settings.news_source = v.trim().to_string();
+    }
     let out = cfg.settings.clone();
     save_state(&state, &cfg)?;
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// News feed
+// ---------------------------------------------------------------------------
+
+/// Maximum accepted news payload (2 MiB).
+const NEWS_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Fetches the raw news content from an http(s) URL or a local .md/.html
+/// file path. Rendering and XSS sanitizing happen on the frontend.
+#[tauri::command]
+pub async fn fetch_news(source: String) -> Result<String, String> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Err("新闻来源不能为空".to_string());
+    }
+
+    if source.starts_with("http://") || source.starts_with("https://") {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .user_agent("dsh-launcher")
+            .build()
+            .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+        let resp = client
+            .get(source)
+            .send()
+            .await
+            .map_err(|e| format!("请求新闻源失败: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("新闻源返回 HTTP {status}"));
+        }
+        if let Some(len) = resp.content_length() {
+            if len > NEWS_MAX_BYTES {
+                return Err("新闻内容超过 2 MiB，已拒绝".to_string());
+            }
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("读取新闻内容失败: {e}"))?;
+        if bytes.len() as u64 > NEWS_MAX_BYTES {
+            return Err("新闻内容超过 2 MiB，已拒绝".to_string());
+        }
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    } else {
+        let path = std::path::PathBuf::from(source);
+        let meta = std::fs::metadata(&path).map_err(|e| format!("读取新闻文件失败: {e}"))?;
+        if !meta.is_file() {
+            return Err("新闻来源不是文件".to_string());
+        }
+        if meta.len() > NEWS_MAX_BYTES {
+            return Err("新闻内容超过 2 MiB，已拒绝".to_string());
+        }
+        std::fs::read_to_string(&path).map_err(|e| format!("读取新闻文件失败: {e}"))
+    }
 }
 
 // ---------------------------------------------------------------------------
