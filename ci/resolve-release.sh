@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Resolves an idempotent GitHub Release for this run.
 #
-#   branch push (main)  -> draft prerelease  v<manifest>-dev.<run_number>
-#   exact version tag   -> draft stable      v<manifest> (tag must match manifest)
+#   branch push (main)  -> prerelease  v<manifest>-dev.<run_number>
+#   exact version tag   -> stable      v<manifest> (tag must match manifest)
 #
-# The release stays a draft until update-release-notes.sh publishes it after
-# every build job succeeds. Re-running the same run reuses the same release.
+# The release is created PUBLISHED (draft=false) with a real git tag, exactly
+# like the reference GugleFS pipeline. Draft releases are deliberately
+# avoided: their tag association is eventual-consistency and tauri-action's
+# parallel builds race it ("Release not found or created"). tauri-action then
+# uploads straight to the numeric release id, no tag lookup needed.
 set -euo pipefail
 
 REF_TYPE="${1:?ref type}"      # branch | tag
@@ -34,34 +37,27 @@ else
   PRERELEASE="true"
 fi
 
-# In CI, build jobs run tauri-action in parallel right after this job. It
-# locates a draft release by listing all releases and matching tag_name, so
-# an eventual-consistency delay here would make every build fail with
-# "Release not found or created". Poll until the release is visible in the
-# release list (bounded).
-for i in $(seq 1 20); do
-  if gh release list --repo "$REPO" --json tagName -q '.[].tagName' 2>/dev/null | grep -qx "$TAG"; then
-    echo "release $TAG visible in release list after ${i} poll(s)"
-    break
-  fi
-  if [[ "$i" == 20 ]]; then
-    echo "error: release $TAG never became visible in the release list" >&2
-    exit 1
-  fi
-  sleep 3
-done
+# Idempotent: reuse the release if the tag already has one (re-run of a run).
+RELEASE_ID="$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" 2>/dev/null | head -n 1 || true)"
+if [[ -n "$RELEASE_ID" ]]; then
+  echo "reusing existing release $RELEASE_ID ($TAG)"
+else
+  # Create a published release; GitHub creates the git tag from target_commitish.
+  RELEASE_ID="$(gh api "repos/$REPO/releases" \
+    -f tag_name="$TAG" \
+    -f target_commitish="$GITHUB_SHA" \
+    -f name="$TAG" \
+    -f body="Preparing artifacts…" \
+    -F draft=false \
+    -F prerelease="$PRERELEASE" \
+    --jq .id)"
+  echo "created release $RELEASE_ID ($TAG, prerelease=$PRERELEASE)"
+fi
 
-# Resolve the numeric release id AFTER the release is visible (the create +
-# immediate id fetch raced GitHub's eventual consistency and returned empty).
-# Use the REST API (numeric id) — `gh release view --json id` returns the
-# node_id (RE_...) for untagged draft releases, which tauri-action then
-# parses as NaN and falls back to its tag-lookup path.
-RELEASE_ID="$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)"
 if [[ -z "$RELEASE_ID" ]]; then
   echo "error: could not resolve numeric id for release $TAG" >&2
   exit 1
 fi
-echo "resolved release id $RELEASE_ID ($TAG)"
 
 echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 echo "tag=$TAG" >> "$GITHUB_OUTPUT"

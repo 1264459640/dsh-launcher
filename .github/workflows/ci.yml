@@ -153,10 +153,6 @@ jobs:
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ needs.prepare.outputs.tag }}
-          # prepare created a draft release; tauri-action must use its draft
-          # lookup path (list releases, match tag_name), otherwise it calls
-          # getReleaseByTag which cannot find draft releases (404).
-          releaseDraft: true
           args: --target ${{ matrix.target }} ${{ matrix.bundle_args }}
 
   update-release-notes:

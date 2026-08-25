@@ -21,4 +21,6 @@ ZH_CHANGELOG="$(awk -v ver="$CHANGELOG_VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1} 
 
 node ci/release-notes-render.mjs "$TAG" "$ASSETS_JSON" "$EN_CHANGELOG" "$ZH_CHANGELOG" > notes.md
 
-gh release edit "$RELEASE_ID" --repo "$REPO" --draft=false --prerelease="$PRERELEASE" --notes-file notes.md
+# Release was created published by resolve-release.sh; just refresh the notes.
+# (Keeps the prerelease flag that prepare resolved.)
+gh release edit "$RELEASE_ID" --repo "$REPO" --prerelease="$PRERELEASE" --notes-file notes.md
