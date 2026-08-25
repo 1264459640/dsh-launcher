@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publishes the prepared release: renders the bilingual architecture download
-# table with clickable asset links plus both changelog sections, then flips
-# the release from draft to published (prerelease flag kept from prepare).
+# table with clickable asset links plus both changelog sections, then refreshes
+# the release notes (prerelease flag kept from prepare).
 set -euo pipefail
 
 RELEASE_ID="${1:?release id}"
@@ -23,4 +23,10 @@ node ci/release-notes-render.mjs "$TAG" "$ASSETS_JSON" "$EN_CHANGELOG" "$ZH_CHAN
 
 # Release was created published by resolve-release.sh; just refresh the notes.
 # (Keeps the prerelease flag that prepare resolved.)
-gh release edit "$RELEASE_ID" --repo "$REPO" --prerelease="$PRERELEASE" --notes-file notes.md
+# REST PATCH by numeric id (like the GugleFS pipeline): `gh release edit`
+# resolves its argument as a TAG, and a bare numeric id is not a tag, so it
+# fails with "release not found" even though the release exists.
+gh api -X PATCH "repos/$REPO/releases/$RELEASE_ID" \
+  -F body=@notes.md \
+  -F prerelease="$PRERELEASE" \
+  --silent
