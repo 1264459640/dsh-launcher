@@ -144,6 +144,7 @@
     "fab": "Tasks",
     "empty": "No tasks",
     "noLogs": "No logs yet",
+    "installingHint": "Installing dependencies, please wait…",
     "cancel": "Cancel",
     "remove": "Remove",
     "createdInstance": "Instance \"{name}\" created",

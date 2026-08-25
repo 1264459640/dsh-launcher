@@ -140,6 +140,9 @@ const sortedTasks = computed(() => store.taskList)
               :status="task.state === 'error' ? 'danger' : 'normal'"
             />
           </div>
+          <div v-if="task.state === 'running' && task.percent >= 90" class="installing-hint">
+            {{ t('tasks.installingHint') }}
+          </div>
           <div class="task-actions" @click.stop>
             <a-button v-if="task.state === 'running'" size="mini" status="warning" @click="onCancel(task.id)">
               {{ t('tasks.cancel') }}
@@ -208,6 +211,13 @@ const sortedTasks = computed(() => store.taskList)
 .task-progress {
   width: 180px;
   flex-shrink: 0;
+}
+
+.installing-hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: rgb(var(--orange-6));
+  white-space: nowrap;
 }
 
 .task-actions {

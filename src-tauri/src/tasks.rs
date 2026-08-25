@@ -308,14 +308,60 @@ async fn install_version_streamed(
         });
     }
 
-    let taken = shared_child.lock().await.take();
-    let Some(mut child) = taken else {
-        return Err("任务已取消".to_string());
+    // Heartbeat: after the metadata phase npm goes quiet while installing /
+    // compiling native modules, so the line-counted percent would freeze.
+    // Keep nudging the percent upward (90 → 99) while the process is alive.
+    {
+        let app2 = app.clone();
+        let tid = task_id.to_string();
+        let hb_child = shared_child.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                let still_running = {
+                    let mut guard = hb_child.lock().await;
+                    match guard.as_mut() {
+                        Some(c) => matches!(c.try_wait(), Ok(None)),
+                        None => false,
+                    }
+                };
+                if !still_running {
+                    break;
+                }
+                let state = app2.state::<AppState>();
+                let mut tasks = state.tasks.lock().await;
+                let Some(task) = tasks.get_mut(&tid) else { break };
+                if task.state != TaskState::Running {
+                    break;
+                }
+                if task.percent < 90 {
+                    task.percent = (task.percent + 2).min(90);
+                } else if task.percent < 99 {
+                    task.percent += 1;
+                } else {
+                    break; // capped; wait for the final 100 on success
+                }
+                let pct = task.percent;
+                drop(tasks);
+                emit_progress(&app2, &tid, TaskState::Running, pct, None, None);
+            }
+        });
+    }
+
+    // Wait for npm to finish by polling try_wait (the heartbeat and
+    // cancellation also access the shared child).
+    let status = loop {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let mut guard = shared_child.lock().await;
+        let Some(child) = guard.as_mut() else {
+            return Err("任务已取消".to_string());
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => continue,
+            Err(e) => return Err(format!("npm 等待失败: {e}")),
+        }
     };
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("npm 等待失败: {e}"))?;
 
     if !status.success() {
         let last = {
@@ -375,7 +421,7 @@ async fn stream_pipe(app: AppHandle, task_id: String, pipe: StreamPipe) {
             match tasks.get_mut(&task_id) {
                 Some(task) if task.state == TaskState::Running => {
                     push_log_locked(task, &line);
-                    let pct = (task.percent + 1).min(95);
+                    let pct = (task.percent + 1).min(90);
                     task.percent = pct;
                     // Throttle: emit progress roughly every 20 log lines.
                     if task.logs.len() % 20 == 0 {

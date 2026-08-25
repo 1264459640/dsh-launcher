@@ -144,6 +144,7 @@
     "fab": "任务",
     "empty": "暂无任务",
     "noLogs": "暂无日志",
+    "installingHint": "正在安装依赖，请稍候…",
     "cancel": "取消",
     "remove": "移除",
     "createdInstance": "已创建实例「{name}」",
