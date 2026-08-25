@@ -71,7 +71,7 @@ fn now_millis() -> i64 {
 
 /// Enqueues a background task that installs the given DSH version (if not
 /// installed yet) and then creates the instance. Returns the task id.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn start_create_instance_task(
     app: AppHandle,
     state: State<'_, AppState>,

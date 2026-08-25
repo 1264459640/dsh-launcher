@@ -78,7 +78,6 @@ async function close() {
         mode="horizontal"
         :selected-keys="selectedKeys"
         class="app-menu"
-        data-tauri-drag-region="false"
         @menu-item-click="onMenuSelect"
       >
         <a-menu-item key="home">{{ t('nav.home') }}</a-menu-item>

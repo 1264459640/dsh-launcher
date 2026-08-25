@@ -253,7 +253,7 @@ pub async fn delete_instance(
     save_state(&state, &cfg)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn list_profiles(state: State<'_, AppState>, home_id: String) -> Result<Vec<String>, String> {
     let cfg = state.config.lock().unwrap();
     let home = cfg
