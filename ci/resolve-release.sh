@@ -34,21 +34,6 @@ else
   PRERELEASE="true"
 fi
 
-# Find an existing release for this tag (draft or not) so a re-run of the
-# same run number reuses it instead of creating a duplicate.
-# Use the REST API (numeric id) — `gh release view --json id` returns the
-# node_id (RE_...) for untagged draft releases, which tauri-action then
-# parses as NaN and falls back to its tag-lookup path.
-EXISTING_ID="$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" 2>/dev/null | head -n 1 || true)"
-if [[ -n "$EXISTING_ID" ]]; then
-  RELEASE_ID="$EXISTING_ID"
-  echo "reusing existing release $RELEASE_ID ($TAG)"
-else
-  gh release create "$TAG" --repo "$REPO" --draft --prerelease="$PRERELEASE" --title "$TAG" --notes "Preparing artifacts…" >/dev/null
-  RELEASE_ID="$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)"
-  echo "created release $RELEASE_ID ($TAG)"
-fi
-
 # In CI, build jobs run tauri-action in parallel right after this job. It
 # locates a draft release by listing all releases and matching tag_name, so
 # an eventual-consistency delay here would make every build fail with
@@ -65,6 +50,18 @@ for i in $(seq 1 20); do
   fi
   sleep 3
 done
+
+# Resolve the numeric release id AFTER the release is visible (the create +
+# immediate id fetch raced GitHub's eventual consistency and returned empty).
+# Use the REST API (numeric id) — `gh release view --json id` returns the
+# node_id (RE_...) for untagged draft releases, which tauri-action then
+# parses as NaN and falls back to its tag-lookup path.
+RELEASE_ID="$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)"
+if [[ -z "$RELEASE_ID" ]]; then
+  echo "error: could not resolve numeric id for release $TAG" >&2
+  exit 1
+fi
+echo "resolved release id $RELEASE_ID ($TAG)"
 
 echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 echo "tag=$TAG" >> "$GITHUB_OUTPUT"

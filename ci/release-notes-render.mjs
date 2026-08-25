@@ -6,6 +6,11 @@
  * or null when the name does not match any known artifact.
  */
 export function classify(name) {
+  // RPM uses a different scheme: dsh-launcher-0.1.0-1.x86_64.rpm
+  const rpm = /^dsh-launcher-\d[\w.-]*\.(x86_64|aarch64)\.rpm$/.exec(name)
+  if (rpm) {
+    return { name, arch: rpm[1] === 'x86_64' ? 'x86_64' : 'arm64', kind: 'rpm' }
+  }
   const m = /^dsh-launcher_\d[\w.-]*_(x64|arm64|amd64|aarch64).*\.(exe|msi|AppImage|deb|rpm|dmg)$/.exec(name)
   if (!m) return null
   const archRaw = m[1]

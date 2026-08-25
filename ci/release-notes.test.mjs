@@ -15,7 +15,7 @@ const ASSETS = [
   'dsh-launcher_0.1.0_x64_en-US.msi',
   'dsh-launcher_0.1.0_amd64.AppImage',
   'dsh-launcher_0.1.0_amd64.deb',
-  'dsh-launcher_0.1.0_amd64.rpm',
+  'dsh-launcher-0.1.0-1.x86_64.rpm',
   'dsh-launcher_0.1.0_aarch64.AppImage',
   'dsh-launcher_0.1.0_aarch64.deb',
   'dsh-launcher_0.1.0_aarch64.dmg',
@@ -29,6 +29,7 @@ test('classifier maps known artifact names to platform/arch/kind', () => {
     'dsh-launcher_0.1.0_amd64.AppImage': { arch: 'x86_64', kind: 'AppImage' },
     'dsh-launcher_0.1.0_aarch64.deb': { arch: 'arm64', kind: 'deb' },
     'dsh-launcher_0.1.0_x64.dmg': { arch: 'x86_64', kind: 'dmg' },
+    'dsh-launcher-0.1.0-1.x86_64.rpm': { arch: 'x86_64', kind: 'rpm' },
   }
   for (const [name, exp] of Object.entries(expected)) {
     const c = classify(name)
