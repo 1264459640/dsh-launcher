@@ -529,12 +529,32 @@ async fn install_version_streamed(
 
     let mut cmd = tokio::process::Command::new(&pnpm_prog);
     crate::process::hide_console(&mut cmd);
+    // Network robustness: the default fetch timeout (60s) and retries (2)
+    // are too tight for large native binaries (e.g. sharp-win32-x64), which
+    // fail with "error (23) ... aborted due to timeout" on flaky connections.
     cmd.args(["install", "--prefix"])
         .arg(&dir)
         .arg("--store-dir")
         .arg(&store_dir)
         .args(["--loglevel=http"])
-        .arg(format!("@deepseek-ai/dsh@{version}"))
+        .args([
+            "--fetch-timeout",
+            "300000", // 5 min per request
+            "--fetch-retries",
+            "5",
+            "--fetch-retry-maxtimeout",
+            "120000",
+            "--network-concurrency",
+            "4",
+        ]);
+    // Optional npm registry mirror (e.g. npmmirror) via DSH_NPM_REGISTRY.
+    if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
+        let registry = registry.trim().to_string();
+        if !registry.is_empty() {
+            cmd.args(["--registry", &registry]);
+        }
+    }
+    cmd.arg(format!("@deepseek-ai/dsh@{version}"))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -619,19 +639,31 @@ async fn install_version_streamed(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => continue,
-            Err(e) => return Err(format!("npm 等待失败: {e}")),
+            Err(e) => return Err(format!("pnpm 等待失败: {e}")),
         }
     };
 
     if !status.success() {
-        let last = {
+        let logs = {
             let tasks = state.tasks.lock().await;
-            tasks
-                .get(task_id)
-                .and_then(|t| t.logs.last().cloned())
-                .unwrap_or_default()
+            tasks.get(task_id).map(|t| t.logs.clone()).unwrap_or_default()
         };
-        return Err(format!("npm 安装失败（{}）", last));
+        // Pick a meaningful error line instead of the last line (which is
+        // often a stack-trace tail like "at process.processTimers (...)").
+        let summary = logs
+            .iter()
+            .rev()
+            .find(|l| {
+                let s = l.to_lowercase();
+                s.contains("err_pnpm")
+                    || s.contains("error")
+                    || s.contains("aborted")
+                    || s.contains("failed")
+                    || s.contains("timeout")
+            })
+            .cloned()
+            .unwrap_or_else(|| logs.last().cloned().unwrap_or_default());
+        return Err(format!("pnpm 安装失败（{}）", summary));
     }
 
     let record = DshVersion {
