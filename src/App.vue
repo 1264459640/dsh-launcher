@@ -35,6 +35,16 @@ const selectedKeys = computed(() => {
   return []
 })
 
+const onTasksPage = computed(() => route.name === 'tasks')
+
+function onFabClick() {
+  if (onTasksPage.value) {
+    router.back()
+  } else {
+    router.push({ name: 'tasks' })
+  }
+}
+
 function onMenuSelect(key: string) {
   router.push({ name: key })
 }
@@ -100,16 +110,23 @@ async function onHeaderMouseDown(e: MouseEvent) {
         </button>
       </div>
     </a-layout-header>
-    <a-layout-content>
-      <router-view />
+    <a-layout-content class="app-content">
+      <a-scrollbar
+        type="track"
+        outer-style="height: 100%"
+        style="height: 100%; overflow-y: auto"
+      >
+        <router-view />
+      </a-scrollbar>
     </a-layout-content>
 
-    <!-- Floating task manager entry (bottom-right) -->
-    <div class="task-fab" @click="router.push({ name: 'tasks' })">
-      <a-badge :count="store.runningTaskCount" :dot="store.runningTaskCount > 0">
+    <!-- Floating task manager entry (bottom-right); becomes a back button on the tasks page. -->
+    <div class="task-fab" @click="onFabClick">
+      <a-badge v-if="!onTasksPage" :count="store.runningTaskCount" :dot="store.runningTaskCount > 0">
         <span class="task-fab-icon">⏱</span>
       </a-badge>
-      <span class="task-fab-text">{{ t('tasks.fab') }}</span>
+      <span v-else class="task-fab-icon">←</span>
+      <span class="task-fab-text">{{ onTasksPage ? t('download.back') : t('tasks.fab') }}</span>
     </div>
   </a-layout>
 </template>
@@ -119,9 +136,16 @@ async function onHeaderMouseDown(e: MouseEvent) {
   height: 100%;
 }
 
+.app-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .app-header {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   height: var(--dl-header-height);
   padding: 0 20px;
   background: var(--color-bg-2);

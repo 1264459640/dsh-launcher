@@ -12,7 +12,11 @@ const { t } = useI18n()
 const store = useLauncherStore()
 
 const expanded = ref<Record<string, boolean>>({})
-const logRefs = ref<Record<string, HTMLElement | null>>({})
+// a-scrollbar component instances expose scrollTo()/scrollTop().
+interface ScrollbarExposed {
+  scrollTo: (options: { top: number }) => void
+}
+const logRefs = ref<Record<string, ScrollbarExposed | null>>({})
 
 onMounted(() => {
   // Refresh once on entry so tasks created before navigation are present.
@@ -33,13 +37,13 @@ function stateColor(state: TaskState): string {
 }
 
 function setLogRef(id: string, el: unknown) {
-  logRefs.value[id] = (el as HTMLElement | null) ?? null
+  logRefs.value[id] = (el as ScrollbarExposed | null) ?? null
 }
 
 async function scrollToBottom(id: string) {
   await nextTick()
-  const el = logRefs.value[id]
-  if (el) el.scrollTop = el.scrollHeight
+  // The browser clamps the offset to the real scroll height.
+  logRefs.value[id]?.scrollTo({ top: Number.MAX_SAFE_INTEGER })
 }
 
 watch(
@@ -154,9 +158,14 @@ const sortedTasks = computed(() => store.taskList)
           <span class="expand-icon">{{ expanded[task.id] ? '▾' : '▸' }}</span>
         </div>
 
-        <div v-if="expanded[task.id]" class="task-log" :ref="(el) => setLogRef(task.id, el)">
+        <a-scrollbar
+          v-if="expanded[task.id]"
+          :ref="(el: unknown) => setLogRef(task.id, el)"
+          class="task-log"
+          style="max-height: 280px; overflow-y: auto"
+        >
           <pre><code>{{ task.logs.join('\n') || t('tasks.noLogs') }}</code></pre>
-        </div>
+        </a-scrollbar>
       </div>
     </div>
   </div>
@@ -231,8 +240,6 @@ const sortedTasks = computed(() => store.taskList)
 
 .task-log {
   background: #1d2129;
-  max-height: 280px;
-  overflow-y: auto;
   border-top: 1px solid var(--color-border-2);
 
   pre {

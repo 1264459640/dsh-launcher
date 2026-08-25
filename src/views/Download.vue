@@ -49,7 +49,11 @@ function onRefreshVersions() {
       </a-menu>
     </aside>
     <section class="download-content">
-      <router-view />
+      <a-scrollbar type="track" outer-style="height: 100%" style="height: 100%; overflow-y: auto">
+        <div class="download-inner">
+          <router-view />
+        </div>
+      </a-scrollbar>
     </section>
   </div>
 </template>
@@ -91,7 +95,11 @@ function onRefreshVersions() {
 
 .download-content {
   flex: 1;
-  overflow-y: auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.download-inner {
   padding: 20px 24px 80px;
 }
 </style>
