@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src/assets/launcher-icon.png" width="256" height="256" alt="DSH Launcher icon">
+<img src="docs/banner.png" width="1024" height="512" alt="DSH Launcher banner">
 
 # DSH Launcher
 
