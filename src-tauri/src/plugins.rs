@@ -808,11 +808,42 @@ async fn do_install_plugin(
     register_bundle_in_manifest(&dir, &input.plugin_id, &input.version)?;
     crate::tasks::push_task_log_pub(app, state, task_id, "已在 package.json 注册 bundle").await;
 
-    // 3. Ensure a cordis insert row exists for non-bundle plugins.
-    ensure_cordis_insert(&dir, &input.plugin_id)?;
-    crate::tasks::push_task_log_pub(app, state, task_id, "已写入 cordis.patch.yml insert 行").await;
+    // 3. A bundle plugin (its package.json declares `dsh.bundle`) is mounted
+    //    automatically from dsh.profile.bundles — writing an additional
+    //    cordis.patch.yml insert row would mount it a second time and the
+    //    loader would fail with `duplicate loader entry id`. Only a plain
+    //    npm package without `dsh.bundle` needs the explicit insert row.
+    if is_bundle_plugin(&dir, &input.plugin_id) {
+        crate::tasks::push_task_log_pub(
+            app,
+            state,
+            task_id,
+            "检测到 bundle 插件，已通过 bundles 注册（跳过 cordis insert 行）",
+        )
+        .await;
+    } else {
+        ensure_cordis_insert(&dir, &input.plugin_id)?;
+        crate::tasks::push_task_log_pub(app, state, task_id, "已写入 cordis.patch.yml insert 行")
+            .await;
+    }
 
     Ok(())
+}
+
+/// Whether the installed plugin is a DSH bundle (its package.json has a
+/// `dsh.bundle` section). Bundles are auto-mounted from dsh.profile.bundles.
+fn is_bundle_plugin(profile_dir: &std::path::Path, plugin_id: &str) -> bool {
+    let pkg_path = profile_dir
+        .join("node_modules")
+        .join(plugin_id)
+        .join("package.json");
+    let Ok(raw) = std::fs::read_to_string(&pkg_path) else {
+        return false;
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    doc.pointer("/dsh/bundle").is_some()
 }
 
 /// pnpm add <spec> into a profile dir with the build-scripts opt-in.
@@ -1058,6 +1089,35 @@ mod tests {
         let raw = std::fs::read_to_string(dir.join("cordis.patch.yml")).unwrap();
         assert_eq!(raw.matches("- insert:").count(), 1, "raw: {raw}");
         assert!(raw.contains("id: dsh-auxiliary"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn is_bundle_plugin_detects_dsh_bundle() {
+        let dir = std::env::temp_dir().join(format!("dsh-plugins-test-{}", uuid::Uuid::new_v4()));
+        let pkg_dir = dir
+            .join("node_modules")
+            .join("@dsh-plugin")
+            .join("dsh-auxiliary");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        // No package.json yet -> not a bundle.
+        assert!(!is_bundle_plugin(&dir, "@dsh-plugin/dsh-auxiliary"));
+        // Bundle plugin: dsh.bundle present.
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"@dsh-plugin/dsh-auxiliary","version":"0.5.1","dsh":{"bundle":{"patch":"./cordis.patch.yml"}}}"#,
+        )
+        .unwrap();
+        assert!(is_bundle_plugin(&dir, "@dsh-plugin/dsh-auxiliary"));
+        // Plain package without dsh.bundle -> not a bundle.
+        let plain_dir = dir.join("node_modules").join("@dsh-plugin").join("plain");
+        std::fs::create_dir_all(&plain_dir).unwrap();
+        std::fs::write(
+            plain_dir.join("package.json"),
+            r#"{"name":"@dsh-plugin/plain","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        assert!(!is_bundle_plugin(&dir, "@dsh-plugin/plain"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

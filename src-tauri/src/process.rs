@@ -115,6 +115,52 @@ pub fn build_env(cfg: &Config, instance_id: &str) -> Result<Vec<(String, String)
     Ok(env)
 }
 
+/// Whether a profile is a DSH web application: its package.json
+/// `dsh.profile.bundles` includes `@deepseek-ai/dsh-web-app`. Such profiles
+/// understand `--host/--port` and get a webview; they must bind a random
+/// free port so several instances don't collide.
+fn is_web_profile(home_path: &std::path::Path, profile: &str) -> bool {
+    let pkg = home_path
+        .join("profiles")
+        .join(profile)
+        .join("package.json");
+    let Ok(raw) = std::fs::read_to_string(&pkg) else {
+        return false;
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    doc.pointer("/dsh/profile/bundles")
+        .and_then(|b| b.as_array())
+        .map(|arr| {
+            arr.iter()
+                .any(|b| b.as_str() == Some("@deepseek-ai/dsh-web-app"))
+        })
+        .unwrap_or(false)
+}
+
+/// Whether the installed `dsh-web-app` bundle accepts `--no-open` (added in
+/// 0.1.0-rc.8). Feature-detect the flag in the bundle's startup script: the
+/// flag is a string literal in `lib/startup.js`, so presence is an exact
+/// signal that survives pre-release version-number formats. The bundle lives
+/// under pnpm's store; we scan `node_modules/.pnpm/**/@deepseek-ai/dsh-web-app/lib/startup.js`.
+fn web_app_supports_no_open(version_dir: &std::path::Path) -> bool {
+    // The pnpm hoisted "public" store keeps one canonical copy with a stable
+    // path; the hashed `.pnpm/<name>@<ver>_<hash>` layout would need a scan.
+    let hoisted = version_dir
+        .join("node_modules")
+        .join(".pnpm")
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh-web-app")
+        .join("lib")
+        .join("startup.js");
+    let Ok(raw) = std::fs::read_to_string(&hoisted) else {
+        return false;
+    };
+    raw.contains("--no-open") || raw.contains("no-open")
+}
+
 /// Spawns a DSH CLI process for the instance/profile and starts the watchers
 /// that parse the web URL, write logs and emit status events.
 pub async fn start_instance_process(
@@ -156,10 +202,28 @@ pub async fn start_instance_process(
     let mut cmd = Command::new(node());
     hide_console(&mut cmd);
     cmd.arg(&bin).arg("--profile").arg(profile);
-    // Only the web app understands --host/--port; other profiles are managed
-    // purely as processes (no URL/webview).
-    if profile == "web" {
+    // Web-app profiles (their bundle list includes @deepseek-ai/dsh-web-app)
+    // get a random free port; other profiles are managed purely as processes
+    // (no URL/webview). We detect the web bundle rather than relying on the
+    // profile being literally named "web" so user-named web profiles work.
+    let home_path = cfg
+        .homes
+        .iter()
+        .find(|h| h.id == inst.home_id)
+        .map(|h| h.path.clone());
+    let is_web = home_path
+        .as_deref()
+        .map(|hp| is_web_profile(hp, profile))
+        .unwrap_or(profile == "web");
+    if is_web {
         cmd.arg("--host").arg("127.0.0.1").arg("--port").arg("0");
+        // `--no-open` was added to dsh-web-app in 0.1.0-rc.8: the launcher
+        // embeds the UI in its own webview, so the app must not open the
+        // system browser. Feature-detect the flag in the installed bundle's
+        // startup.js rather than comparing pre-release versions.
+        if web_app_supports_no_open(&version.dir) {
+            cmd.arg("--no-open");
+        }
     }
 
     let env = build_env(&cfg, instance_id)?;
@@ -365,4 +429,65 @@ async fn log_line(log: &Arc<Mutex<std::fs::File>>, line: &str) {
 
 fn emit_status(app: &AppHandle, status: &InstanceStatus) {
     let _ = app.emit(STATUS_EVENT, status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_web_profile_detects_web_app_bundle() {
+        let dir = std::env::temp_dir().join(format!("dsh-proc-test-{}", uuid::Uuid::new_v4()));
+        let profile_dir = dir.join("profiles").join("test");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        // No package.json -> not a web profile.
+        assert!(!is_web_profile(&dir, "test"));
+        // Web app bundle -> web profile.
+        std::fs::write(
+            profile_dir.join("package.json"),
+            r#"{"name":"dsh-profile-test","private":true,"dependencies":{},"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base","@deepseek-ai/dsh-web-app"]}}}"#,
+        )
+        .unwrap();
+        assert!(is_web_profile(&dir, "test"));
+        // Non-web profile (no dsh-web-app bundle) -> false.
+        let other = dir.join("profiles").join("bot");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            other.join("package.json"),
+            r#"{"name":"dsh-profile-bot","private":true,"dependencies":{},"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base"]}}}"#,
+        )
+        .unwrap();
+        assert!(!is_web_profile(&dir, "bot"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn web_app_supports_no_open_feature_detects_flag() {
+        let dir = std::env::temp_dir().join(format!("dsh-proc-test-{}", uuid::Uuid::new_v4()));
+        let startup_dir = dir
+            .join("node_modules")
+            .join(".pnpm")
+            .join("node_modules")
+            .join("@deepseek-ai")
+            .join("dsh-web-app")
+            .join("lib");
+        // No startup.js yet -> false.
+        assert!(!web_app_supports_no_open(&dir));
+        std::fs::create_dir_all(&startup_dir).unwrap();
+        // Old bundle without the flag (<= 0.1.0-rc.7) -> false.
+        std::fs::write(
+            startup_dir.join("startup.js"),
+            "const p = new Command().option('--host <host>').option('--port <port>')",
+        )
+        .unwrap();
+        assert!(!web_app_supports_no_open(&dir));
+        // New bundle with the flag (>= 0.1.0-rc.8) -> true.
+        std::fs::write(
+            startup_dir.join("startup.js"),
+            "const p = new Command().option('--no-open', 'do not open the Web UI in the default browser')",
+        )
+        .unwrap();
+        assert!(web_app_supports_no_open(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
