@@ -13,7 +13,7 @@ import type {
   MarketPlugin,
   NewInstanceInput,
   PluginChannel,
-  PluginVersionInfo,
+  PluginVersionPage,
   RemoteVersion,
   RuntimeStatus,
   SetPluginsEnabledInput,
@@ -528,23 +528,48 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
     case 'fetch_plugin_versions': {
       const pluginId = args?.plugin_id as string
       const channel = args?.channel as PluginChannel
+      const page = (args?.page as number) ?? 1
       if (channel === 'alpha') {
-        return [
-          { version: 'abc1234def5678', channel: 'alpha', label: '2026-04-10 · fix: something', is_default: true },
-          { version: 'bbb2222ccc3333', channel: 'alpha', label: '2026-04-09 · feat: another', is_default: false },
-        ] as T
-      }
-      if (channel === 'beta') {
-        return [
-          { version: '0.4.0-next.1', channel: 'beta', label: '2026-04-08', is_default: true },
-          { version: '0.4.0-next.0', channel: 'beta', label: '2026-04-01', is_default: false },
-        ] as T
+        // Simulate pagination: each page yields 2 fake commits; 3 pages total.
+        const totalPages = 3
+        const per = 2
+        const start = (page - 1) * per
+        const items = [
+          { version: 'abc1234def5678', label: '2026-04-10 · fix: something' },
+          { version: 'bbb2222ccc3333', label: '2026-04-09 · feat: another' },
+          { version: 'ccc3333ddd4444', label: '2026-04-08 · chore: deps' },
+          { version: 'ddd4444eee5555', label: '2026-04-07 · fix: typo' },
+          { version: 'eee5555fff6666', label: '2026-04-06 · feat: api' },
+          { version: 'fff6666aaa1111', label: '2026-04-05 · docs: readme' },
+        ]
+        const slice = items.slice(start, start + per)
+        return {
+          versions: slice.map((c, i) => ({
+            version: c.version,
+            channel: 'alpha',
+            label: c.label,
+            is_default: page === 1 && i === 0,
+          })),
+          has_more: page < totalPages,
+        } as T
       }
       void pluginId
-      return [
-        { version: '1.3.0', channel: 'stable', label: '2026-04-05', is_default: true },
-        { version: '1.2.0', channel: 'stable', label: '2026-03-20', is_default: false },
-      ] as T
+      if (channel === 'beta') {
+        return {
+          versions: [
+            { version: '0.4.0-next.1', channel: 'beta', label: '2026-04-08', is_default: true },
+            { version: '0.4.0-next.0', channel: 'beta', label: '2026-04-01', is_default: false },
+          ],
+          has_more: false,
+        } as T
+      }
+      return {
+        versions: [
+          { version: '1.3.0', channel: 'stable', label: '2026-04-05', is_default: true },
+          { version: '1.2.0', channel: 'stable', label: '2026-03-20', is_default: false },
+        ],
+        has_more: false,
+      } as T
     }
     case 'list_installed_plugins': {
       return [
@@ -625,8 +650,8 @@ export const api = {
 
   // Plugin marketplace
   fetchPluginMarket: (query?: string) => call<MarketPlugin[]>('fetch_plugin_market', { query: query ?? null }),
-  fetchPluginVersions: (pluginId: string, channel: PluginChannel) =>
-    call<PluginVersionInfo[]>('fetch_plugin_versions', { plugin_id: pluginId, channel }),
+  fetchPluginVersions: (pluginId: string, channel: PluginChannel, page = 1) =>
+    call<PluginVersionPage>('fetch_plugin_versions', { plugin_id: pluginId, channel, page }),
   listInstalledPlugins: (instanceId: string, profile: string) =>
     call<InstalledPlugin[]>('list_installed_plugins', { instance_id: instanceId, profile }),
   setPluginsEnabled: (input: SetPluginsEnabledInput) => call<void>('set_plugins_enabled', { input }),

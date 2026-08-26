@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '@/api'
@@ -20,21 +20,27 @@ const channelMeta: Record<PluginChannel, { letter: string; color: string }> = {
   alpha: { letter: 'A', color: 'red' },
 }
 
+// Accumulated versions per channel (pages are appended for alpha).
 const versionsByChannel = ref<Record<PluginChannel, PluginVersionInfo[]>>({
   stable: [],
   beta: [],
   alpha: [],
 })
+// Pagination state per channel.
+const hasMore = ref<Record<PluginChannel, boolean>>({ stable: false, beta: false, alpha: false })
+const loadingMore = ref<Record<PluginChannel, boolean>>({ stable: false, beta: false, alpha: false })
+const pagesLoaded = ref<Record<PluginChannel, number>>({ stable: 1, beta: 1, alpha: 1 })
 const loadingChannel = ref<PluginChannel | null>(null)
 const error = ref<string | null>(null)
 
 async function loadChannel(ch: PluginChannel) {
-  if (!plugin.value) return
+  if (!plugin.value || loadingChannel.value === ch) return
   loadingChannel.value = ch
   error.value = null
   try {
-    const list = await api.fetchPluginVersions(plugin.value.id, ch)
-    versionsByChannel.value[ch] = list
+    const page = await api.fetchPluginVersions(plugin.value.id, ch, pagesLoaded.value[ch])
+    versionsByChannel.value[ch] = page.versions
+    hasMore.value[ch] = page.has_more
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -42,15 +48,72 @@ async function loadChannel(ch: PluginChannel) {
   }
 }
 
-onMounted(() => {
+/** Load the next page for a channel, appending to the accumulated list. */
+async function loadMore(ch: PluginChannel) {
+  if (!plugin.value || loadingMore.value[ch] || loadingChannel.value === ch) return
+  if (!hasMore.value[ch]) return
+  loadingMore.value[ch] = true
+  try {
+    const nextPage = pagesLoaded.value[ch] + 1
+    const page = await api.fetchPluginVersions(plugin.value.id, ch, nextPage)
+    versionsByChannel.value[ch] = [...versionsByChannel.value[ch], ...page.versions]
+    pagesLoaded.value[ch] = nextPage
+    hasMore.value[ch] = page.has_more
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    loadingMore.value[ch] = false
+  }
+}
+
+// --- Infinite scroll: an IntersectionObserver watches a sentinel at the
+// bottom of each channel card and loads the next page when it becomes
+// visible (i.e. the user scrolled near the end).
+
+const sentinels = new Map<PluginChannel, HTMLElement>()
+let observer: IntersectionObserver | null = null
+
+function ensureObserver() {
+  if (observer) return
+  observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        const ch = (entry.target as HTMLElement).dataset.channel as PluginChannel | undefined
+        if (ch) loadMore(ch)
+      }
+    },
+    // Trigger slightly before the element is fully visible.
+    { rootMargin: '120px 0px' },
+  )
+}
+
+function onSentinel(el: unknown, ch: PluginChannel) {
+  const node = el as HTMLElement | null
+  if (!node) {
+    sentinels.delete(ch)
+    return
+  }
+  sentinels.set(ch, node)
+  ensureObserver()
+  observer?.observe(node)
+}
+
+onMounted(async () => {
   if (!plugin.value) {
-    // No plugin carried over: go back to the market.
     router.replace({ name: 'download-plugins' })
     return
   }
-  // Load stable and beta lazily; alpha needs the repo so it is loaded on demand.
-  loadChannel('stable')
-  loadChannel('beta')
+  // Load stable + beta now; alpha loads lazily on scroll too (page 1 shows
+  // the HEAD commit immediately).
+  await Promise.all([loadChannel('stable'), loadChannel('beta')])
+  await loadChannel('alpha')
+})
+
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  observer = null
+  sentinels.clear()
 })
 
 function pick(ch: PluginChannel, v: PluginVersionInfo) {
@@ -93,7 +156,9 @@ const hasAny = computed(() =>
               :style="{ background: channelMeta[ch].color }"
             >{{ channelMeta[ch].letter }}</span>
             {{ t(`plugins.channel.${ch}`) }}
-            <span class="channel-desc">{{ t(`plugins.channelDesc.${ch}`) }}</span>
+            <a-tag v-if="hasMore[ch]" size="small" color="arcoblue" class="lazy-tag">
+              {{ t('plugins.lazyLoad') }}
+            </a-tag>
           </h3>
           <a-button
             size="small"
@@ -127,8 +192,21 @@ const hasAny = computed(() =>
             </div>
             <span class="version-arrow">›</span>
           </div>
+          <!-- Sentinel for infinite scroll: loads the next page when scrolled into view -->
+          <div
+            v-if="hasMore[ch]"
+            :ref="(el: unknown) => onSentinel(el, ch)"
+            :data-channel="String(ch)"
+            class="load-more-sentinel"
+          >
+            <a-spin v-if="loadingMore[ch]" :size="14" />
+            <span v-else class="load-more-hint">{{ t('plugins.scrollMore') }}</span>
+          </div>
         </template>
-        <div v-else class="card-empty">{{ t('plugins.noVersions') }}</div>
+        <div v-else class="card-empty">
+          <template v-if="loadingChannel === ch">{{ t('common.loading') }}</template>
+          <template v-else>{{ t('plugins.noVersions') }}</template>
+        </div>
       </div>
 
       <a-empty v-if="!hasAny && !loadingChannel" :description="t('plugins.noVersions')" />
@@ -159,6 +237,11 @@ const hasAny = computed(() =>
   padding: 40px 0;
 }
 
+.lazy-tag {
+  margin-left: 8px;
+  vertical-align: 2px;
+}
+
 .channel-letter {
   display: inline-flex;
   align-items: center;
@@ -171,13 +254,6 @@ const hasAny = computed(() =>
   font-weight: 700;
   margin-right: 6px;
   vertical-align: -3px;
-}
-
-.channel-desc {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--color-text-3);
-  margin-left: 8px;
 }
 
 .version-row {
@@ -236,5 +312,19 @@ const hasAny = computed(() =>
   padding: 18px 12px;
   color: var(--color-text-3);
   font-size: 13px;
+}
+
+.load-more-sentinel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 0 4px;
+  min-height: 36px;
+}
+
+.load-more-hint {
+  font-size: 12px;
+  color: var(--color-text-4);
 }
 </style>

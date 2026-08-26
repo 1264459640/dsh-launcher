@@ -136,6 +136,12 @@ export interface PluginVersionInfo {
   is_default: boolean
 }
 
+/** A page of versions; `has_more` enables infinite scrolling (alpha channel). */
+export interface PluginVersionPage {
+  versions: PluginVersionInfo[]
+  has_more: boolean
+}
+
 export interface InstalledPlugin {
   id: string
   version?: string

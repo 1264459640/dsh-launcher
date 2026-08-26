@@ -44,7 +44,8 @@ pub struct MarketPluginUrls {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MarketPluginRelationship {
-    #[serde(rename = "type")]
+    /// The market JSON uses `type`; we expose it to the frontend as `kind`.
+    #[serde(alias = "type")]
     pub kind: String,
     pub id: String,
     pub versions: String,
@@ -97,6 +98,14 @@ pub struct PluginVersionInfo {
     pub label: Option<String>,
     /// Whether this is the channel's default (latest) entry.
     pub is_default: bool,
+}
+
+/// A page of versions. `has_more` is true when pagination can continue
+/// (used by the alpha / commit channel).
+#[derive(Clone, Debug, Serialize)]
+pub struct PluginVersionPage {
+    pub versions: Vec<PluginVersionInfo>,
+    pub has_more: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -241,16 +250,24 @@ fn github_repo_of(plugin: &MarketPlugin) -> Option<String> {
 
 /// Fetches versions for a plugin across the requested channel.
 /// - stable/beta read the npm registry dist-tags (latest / next) and fall
-///   back to the version list ordered by publish time.
-/// - alpha reads the default branch HEAD commit from GitHub.
+///   back to the version list ordered by publish time (all at once).
+/// - alpha pages through the GitHub commit history (30 per page); `page` is
+///   1-based and defaults to 1. `has_more` tells the UI to lazy-load more.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn fetch_plugin_versions(
     plugin_id: String,
     channel: PluginChannel,
-) -> Result<Vec<PluginVersionInfo>, String> {
+    page: Option<u32>,
+) -> Result<PluginVersionPage, String> {
     match channel {
-        PluginChannel::Stable | PluginChannel::Beta => npm_versions(&plugin_id, &channel).await,
-        PluginChannel::Alpha => alpha_commit(&plugin_id).await,
+        PluginChannel::Stable | PluginChannel::Beta => {
+            let versions = npm_versions(&plugin_id, &channel).await?;
+            Ok(PluginVersionPage {
+                versions,
+                has_more: false,
+            })
+        }
+        PluginChannel::Alpha => alpha_commit(&plugin_id, page.unwrap_or(1)).await,
     }
 }
 
@@ -332,7 +349,10 @@ async fn npm_versions(
     Ok(out)
 }
 
-async fn alpha_commit(plugin_id: &str) -> Result<Vec<PluginVersionInfo>, String> {
+/// Fetches one page of the commit history (alpha channel). GitHub commits
+/// API returns up to `per_page` items; `has_more` is true when a full page
+/// came back. `is_default` marks the first commit of page 1.
+async fn alpha_commit(plugin_id: &str, page: u32) -> Result<PluginVersionPage, String> {
     // Alpha needs the GitHub repo; it is derived from the market entry.
     let catalog = fetch_plugin_market(None).await?;
     let plugin = catalog
@@ -342,9 +362,11 @@ async fn alpha_commit(plugin_id: &str) -> Result<Vec<PluginVersionInfo>, String>
     let repo = github_repo_of(plugin)
         .ok_or_else(|| format!("插件 {plugin_id} 没有可用的 GitHub 仓库地址"))?;
 
-    // HEAD commit of the default branch (client_id boosts the rate limit).
-    let url = github_api_url(&format!("/repos/{repo}/commits?per_page=20"));
-    let doc = fetch_json(&url, 2 * 1024 * 1024).await?;
+    const PER_PAGE: u32 = 30;
+    let url = github_api_url(&format!(
+        "/repos/{repo}/commits?per_page={PER_PAGE}&page={page}"
+    ));
+    let doc = fetch_json(&url, 4 * 1024 * 1024).await?;
     let mut out: Vec<PluginVersionInfo> = Vec::new();
     if let Some(arr) = doc.as_array() {
         for (i, commit) in arr.iter().enumerate() {
@@ -374,14 +396,15 @@ async fn alpha_commit(plugin_id: &str) -> Result<Vec<PluginVersionInfo>, String>
                 version: sha,
                 channel: PluginChannel::Alpha,
                 label,
-                is_default: i == 0,
+                is_default: page == 1 && i == 0,
             });
         }
     }
-    if out.is_empty() {
-        return Err(format!("未能从 {repo} 获取提交记录"));
-    }
-    Ok(out)
+    let has_more = out.len() as u32 == PER_PAGE;
+    Ok(PluginVersionPage {
+        versions: out,
+        has_more,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -984,6 +1007,19 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn relationship_type_alias_roundtrip() {
+        // The market JSON uses `type`, the frontend expects `kind`.
+        let raw = r#"{"type":"dependency","id":"@dsh-plugin/dsh-loader","versions":">=1.3.0"}"#;
+        let rel: MarketPluginRelationship = serde_json::from_str(raw).unwrap();
+        assert_eq!(rel.kind, "dependency");
+        assert_eq!(rel.id, "@dsh-plugin/dsh-loader");
+        // Serialized back out it must be `kind` (frontend contract).
+        let out = serde_json::to_string(&rel).unwrap();
+        assert!(out.contains("\"kind\":\"dependency\""), "out: {out}");
+        assert!(!out.contains("\"type\":"), "out: {out}");
+    }
+
     // Live network smoke tests (skipped by default; run with
     // `cargo test plugins::tests::live_ -- --ignored`).
     #[tokio::test]
@@ -996,6 +1032,24 @@ mod tests {
             plugins.iter().any(|p| p.id == "@dsh-plugin/dsh-loader"),
             "loader missing from market"
         );
+        // Every relationship must round-trip to `kind` for the frontend.
+        for p in &plugins {
+            if let Some(rels) = &p.relationship {
+                for r in rels {
+                    let out = serde_json::to_string(r).unwrap();
+                    assert!(
+                        out.contains("\"kind\":"),
+                        "relationship of {} must serialize kind: {out}",
+                        p.id
+                    );
+                    assert!(
+                        !out.contains("\"type\":"),
+                        "relationship of {} must not leak `type`: {out}",
+                        p.id
+                    );
+                }
+            }
+        }
         // npm-based stable versions for a known plugin.
         let stable = npm_versions("@dsh-plugin/dsh-auxiliary", &PluginChannel::Stable)
             .await
@@ -1007,13 +1061,36 @@ mod tests {
             .unwrap();
         assert!(!beta.is_empty());
         // alpha: GitHub commit channel (client_id boosts the rate limit).
-        let alpha = fetch_plugin_versions(
+        let page1 = fetch_plugin_versions(
             "@dsh-plugin/dsh-auxiliary".to_string(),
             PluginChannel::Alpha,
+            Some(1),
         )
         .await
         .unwrap();
-        assert!(!alpha.is_empty(), "alpha commits must be fetchable");
-        assert!(alpha[0].is_default, "first commit is the default");
+        assert!(
+            !page1.versions.is_empty(),
+            "alpha commits must be fetchable"
+        );
+        assert!(page1.versions[0].is_default, "first commit is the default");
+        // Pagination: page 2 must return a disjoint set when has_more.
+        if page1.has_more {
+            let page2 = fetch_plugin_versions(
+                "@dsh-plugin/dsh-auxiliary".to_string(),
+                PluginChannel::Alpha,
+                Some(2),
+            )
+            .await
+            .unwrap();
+            assert!(!page2.versions.is_empty());
+            assert!(
+                page2
+                    .versions
+                    .iter()
+                    .all(|v| !page1.versions.iter().any(|a| a.version == v.version)),
+                "page 2 must not repeat page 1 commits"
+            );
+            assert!(!page2.versions[0].is_default, "only page 1 has the default");
+        }
     }
 }

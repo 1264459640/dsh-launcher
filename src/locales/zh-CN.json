@@ -95,15 +95,12 @@
     "channel": {
       "stable": "稳定版",
       "beta": "测试版",
-      "alpha": "最新提交"
-    },
-    "channelDesc": {
-      "stable": "releases / latest（绿色 R）",
-      "beta": "pre-releases / next（黄色 B）",
-      "alpha": "最新 commit（红色 A）"
+      "alpha": "开发版"
     },
     "defaultTag": "默认",
     "noVersions": "该渠道暂无版本",
+    "lazyLoad": "滚动加载更多",
+    "scrollMore": "继续滚动加载…",
     "installTitle": "安装插件",
     "chooseInstance": "选择实例",
     "chooseProfile": "选择 Profile",

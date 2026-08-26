@@ -95,15 +95,12 @@
     "channel": {
       "stable": "Stable",
       "beta": "Beta",
-      "alpha": "Latest commit"
-    },
-    "channelDesc": {
-      "stable": "releases / latest (green R)",
-      "beta": "pre-releases / next (yellow B)",
-      "alpha": "latest commit (red A)"
+      "alpha": "Dev"
     },
     "defaultTag": "Default",
     "noVersions": "No versions in this channel",
+    "lazyLoad": "Scroll to load more",
+    "scrollMore": "Keep scrolling to load…",
     "installTitle": "Install plugin",
     "chooseInstance": "Choose instance",
     "chooseProfile": "Choose profile",
