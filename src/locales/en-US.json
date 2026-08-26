@@ -84,8 +84,43 @@
   },
   "plugins": {
     "title": "Plugins",
-    "coming": "Coming S∞n",
-    "desc": "The plugin marketplace is under construction. Stay tuned."
+    "searchPlaceholder": "Search plugins (name / description)",
+    "refresh": "Refresh market",
+    "empty": "No plugins",
+    "noMatch": "No matching plugins",
+    "loading": "Loading…",
+    "error": "Failed to load",
+    "back": "Back to market",
+    "chooseVersion": "Choose version",
+    "channel": {
+      "stable": "Stable",
+      "beta": "Beta",
+      "alpha": "Latest commit"
+    },
+    "channelDesc": {
+      "stable": "releases / latest (green R)",
+      "beta": "pre-releases / next (yellow B)",
+      "alpha": "latest commit (red A)"
+    },
+    "defaultTag": "Default",
+    "noVersions": "No versions in this channel",
+    "installTitle": "Install plugin",
+    "chooseInstance": "Choose instance",
+    "chooseProfile": "Choose profile",
+    "noInstance": "No instance available. Create one first.",
+    "noProfile": "No profile under this instance's DSH_HOME. Create one first.",
+    "goDownload": "Create instance",
+    "startInstall": "Start install",
+    "installTaskAdded": "Install task created. Track progress in Tasks.",
+    "buildScriptsHint": "Dependency build scripts are allowed automatically (onlyBuiltDependencies: *)",
+    "dependency": "Dependency",
+    "incompatibility": "Conflict",
+    "homepage": "Homepage",
+    "repository": "Repository",
+    "issues": "Issues",
+    "viewLinks": "Links",
+    "marketError": "Failed to load plugin market",
+    "retry": "Retry"
   },
   "settings": {
     "title": "Settings",
@@ -167,7 +202,20 @@
     "save": "Save",
     "cancel": "Cancel",
     "saved": "Instance saved",
-    "notFound": "Instance not found"
+    "notFound": "Instance not found",
+    "pluginsDesc": "Manage plugins in the selected profile of this instance: enable / disable, with multi-select batch actions. Core deepseek-ai official plugins are hidden.",
+    "pluginsPickProfile": "Select a profile above to view its plugins",
+    "pluginsEmpty": "No plugins in this profile",
+    "pluginVersion": "Version",
+    "pluginStatus": "Status",
+    "pluginOn": "On",
+    "pluginOff": "Off",
+    "pluginEnabled": "Enabled {name}",
+    "pluginDisabled": "Disabled {name}",
+    "pluginsBatchEnable": "Batch enable ({count})",
+    "pluginsBatchDisable": "Batch disable ({count})",
+    "pluginsBatchEnabled": "Enabled {count} plugins",
+    "pluginsBatchDisabled": "Disabled {count} plugins"
   },
   "tasks": {
     "title": "Task Manager",

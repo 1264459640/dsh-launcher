@@ -96,3 +96,64 @@ export interface NewInstanceInput {
   env_overrides: Record<string, string>
   default_profile: string | null
 }
+
+// ---------------------------------------------------------------------------
+// Plugin marketplace
+// ---------------------------------------------------------------------------
+
+export interface MarketPluginDescription {
+  language: string
+  content: string
+}
+
+export interface MarketPluginUrls {
+  homepage?: string
+  repository?: string
+  issues?: string
+}
+
+export interface MarketPluginRelationship {
+  kind: string // "dependency" | "incompatibility"
+  id: string
+  versions: string
+}
+
+export interface MarketPlugin {
+  id: string
+  name: string
+  description?: string | MarketPluginDescription[]
+  support_versions?: unknown
+  urls?: MarketPluginUrls
+  relationship?: MarketPluginRelationship[]
+}
+
+export type PluginChannel = 'stable' | 'beta' | 'alpha'
+
+export interface PluginVersionInfo {
+  version: string
+  channel: PluginChannel
+  label?: string
+  is_default: boolean
+}
+
+export interface InstalledPlugin {
+  id: string
+  version?: string
+  enabled: boolean
+  cordis_id?: string
+}
+
+export interface InstallPluginInput {
+  pluginId: string
+  version: string
+  channel: PluginChannel
+  instanceId: string
+  profile: string
+}
+
+export interface SetPluginsEnabledInput {
+  instanceId: string
+  profile: string
+  pluginIds: string[]
+  enabled: boolean
+}

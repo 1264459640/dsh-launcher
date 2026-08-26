@@ -26,6 +26,11 @@ Tauri 2 + Vue 3 + TypeScript + Sass + vue-router + vue-i18n + Arco Design Vue.
   - Create a dedicated DSH_HOME per instance (created and registered under the app data directory automatically).
 - **One-click launch**: pick an instance and a profile on the home page and start; the launcher parses the URL printed by `dsh web` and opens the DSH Web GUI in a dedicated webview window.
 - **Environment overrides**: add or remove runtime environment variables on the instance settings page; they are injected into the child process at launch (`DSH_HOME` is reserved and always injected by the launcher from the selected DSH_HOME).
+- **Plugin marketplace**: browse plugins published to the [DSH plugin market](https://dsh-plug.in/) (`https://dsh-plug.in/api/plugins.json`), search by name/description, and install them into any instance's profile:
+  - **Three version channels**, distinguished by colored icon letters — **stable** (releases / npm `latest`, green **R**), **beta** (pre-releases / npm `next`, yellow **B**) and **alpha** (latest commit on GitHub, red **A**);
+  - The install flow is a wizard: pick plugin → pick version channel/version → pick instance → pick profile → create a task → start installing;
+  - Dependency build scripts are allowed automatically (`onlyBuiltDependencies: ['*']`), and the installed plugin is registered in the profile's `package.json` (`dsh.profile.bundles` + `dependencies`) plus a `cordis.patch.yml` insert row for non-bundle plugins.
+- **Per-profile plugin management** (instance settings → Plugins tab): filter by profile to view the plugins installed in it, enable/disable individual plugins, and multi-select for batch enable/disable. Core `@deepseek-ai/*` packages are hidden.
 - **System tray**:
   - Double-click: opens the most recently focused instance's profile page; with a single running instance opens it directly, otherwise shows the launcher;
   - Right-click menu: a "Running profiles" submenu offers Open / Stop for each running instance, plus "Open launcher / Quit launcher".
@@ -37,8 +42,9 @@ Tauri 2 + Vue 3 + TypeScript + Sass + vue-router + vue-i18n + Arco Design Vue.
 ## Interface
 
 - **Home**: left panel (instance status → linked instance/profile dropdowns → large launch button → instance list / instance settings); right side reserved for a news area.
-- **Download**: sidebar with "Create instance / Download plugins"; the create page groups installable versions by stable/prerelease; clicking a version opens the naming page (instance name, DSH_HOME choice, "Start download" at the bottom).
+- **Download**: sidebar with "Create instance / Download plugins"; the create page groups installable versions by stable/prerelease; clicking a version opens the naming page (instance name, DSH_HOME choice, "Start download" at the bottom). The plugins page is the marketplace; a three-step wizard (plugin → version channel → instance/profile) creates an install task.
 - **Instances**: name, version, DSH_HOME, profile, runtime status and URL, edit/delete.
+- **Instance settings → Plugins**: filter by profile, enable/disable plugins, multi-select batch enable/disable (`@deepseek-ai/*` core plugins hidden).
 - **Settings**: language, close to tray, launch at login, DSH_HOME management.
 
 ## Development
@@ -72,6 +78,8 @@ pnpm dev            # open http://localhost:1420
 - `src-tauri/src/`
   - `config.rs`: config model and atomic persistence
   - `commands.rs`: all Tauri commands (CRUD / version installs / instance start-stop / settings)
+  - `plugins.rs`: plugin marketplace — catalog fetch, per-channel versions (npm dist-tags + GitHub commits), install task, profile manifest registration and enable/disable
+  - `tasks.rs`: background task system (create-instance / install-plugin) with progress and log events
   - `process.rs`: instance process management (spawn / kill / URL parsing / env injection / logs)
   - `tray.rs`: system tray and dynamic menu
   - `windows.rs`: instance webview window management

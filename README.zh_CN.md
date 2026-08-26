@@ -26,6 +26,11 @@ Tauri 2 + Vue 3 + TypeScript + Sass + vue-router + vue-i18n + Arco Design Vue。
   - 为实例新建专属 DSH_HOME（自动在数据目录下创建并注册）。
 - **一键启动**：主页选择实例 + Profile 后一键启动；启动后解析 `dsh web` 输出的 URL，在独立 Webview 窗口中打开 DSH Web GUI。
 - **环境变量复写**：实例设置页可增删运行时环境变量，启动时注入子进程（`DSH_HOME` 为保留项，由启动器按所选 DSH_HOME 注入）。
+- **插件市场**：浏览 [DSH 插件市场](https://dsh-plug.in/)（`https://dsh-plug.in/api/plugins.json`）发布的插件，按名称/描述搜索，并安装到任意实例的 Profile：
+  - **三个版本渠道**，以彩色字母图标区分——**稳定版**（releases / npm `latest`，绿色 **R**）、**测试版**（pre-releases / npm `next`，黄色 **B**）、**最新提交**（GitHub 最新 commit，红色 **A**）；
+  - 安装流程为向导：选插件 → 选版本渠道/版本 → 选实例 → 选 Profile → 创建任务 → 开始安装；
+  - 自动允许依赖的 buildScripts（`onlyBuiltDependencies: ['*']`），并在 Profile 的 `package.json`（`dsh.profile.bundles` + `dependencies`）注册插件，非 bundle 插件额外写入 `cordis.patch.yml` insert 行。
+- **按 Profile 管理插件**（实例设置 → 插件页）：筛选 Profile 查看其下插件，单个启用/禁用，支持多选批量启用/禁用；核心 `@deepseek-ai/*` 包不显示。
 - **系统托盘**：
   - 双击托盘：打开最后聚焦的实例 Profile 页面；仅一个运行实例时直接打开它，否则显示启动器；
   - 右键菜单：「运行中的 Profile」二级菜单为每个运行中实例提供「打开 / 停止」；另有「打开启动器 / 退出启动器」。
@@ -37,8 +42,9 @@ Tauri 2 + Vue 3 + TypeScript + Sass + vue-router + vue-i18n + Arco Design Vue。
 ## 界面
 
 - **启动页**：左侧面板（实例状态 → 实例/Profile 联动下拉 → 大启动按钮 → 实例列表/实例设置），右侧预留新闻区域。
-- **下载页**：侧边栏「实例创建 / 插件下载」；实例创建页按正式版/预览版分组展示可装版本，点击版本进入命名页（输入实例名、选择 DSH_HOME，底部「开始下载」）。
+- **下载页**：侧边栏「实例创建 / 插件下载」；实例创建页按正式版/预览版分组展示可装版本，点击版本进入命名页（输入实例名、选择 DSH_HOME，底部「开始下载」）。插件页即插件市场，三步向导（插件 → 版本渠道 → 实例/Profile）创建安装任务。
 - **实例列表**：名称、版本、DSH_HOME、Profile、运行状态与 URL、设置/删除。
+- **实例设置 → 插件页**：筛选 Profile 查看插件、启用/禁用、多选批量启用/禁用（`@deepseek-ai/*` 核心插件不显示）。
 - **设置页**：语言、关闭到托盘、开机自启、DSH_HOME 管理。
 
 ## 开发
@@ -72,6 +78,8 @@ pnpm dev            # 打开 http://localhost:1420
 - `src-tauri/src/`
   - `config.rs`：配置模型与原子持久化
   - `commands.rs`：全部 Tauri 命令（CRUD / 版本安装 / 实例启停 / 设置）
+  - `plugins.rs`：插件市场——市场目录拉取、分渠道版本（npm dist-tags + GitHub commits）、安装任务、Profile manifest 注册与启停
+  - `tasks.rs`：后台任务系统（建实例 / 装插件）与进度、日志事件
   - `process.rs`：实例进程管理（spawn / kill / URL 解析 / 环境注入 / 日志）
   - `tray.rs`：系统托盘与动态菜单
   - `windows.rs`：实例 Webview 窗口管理

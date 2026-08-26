@@ -84,8 +84,43 @@
   },
   "plugins": {
     "title": "插件下载",
-    "coming": "Coming S∞n",
-    "desc": "插件市场正在建设中，敬请期待。"
+    "searchPlaceholder": "搜索插件（名称 / 描述）",
+    "refresh": "刷新市场",
+    "empty": "暂无插件",
+    "noMatch": "没有匹配的插件",
+    "loading": "加载中…",
+    "error": "加载失败",
+    "back": "返回市场",
+    "chooseVersion": "选择版本",
+    "channel": {
+      "stable": "稳定版",
+      "beta": "测试版",
+      "alpha": "最新提交"
+    },
+    "channelDesc": {
+      "stable": "releases / latest（绿色 R）",
+      "beta": "pre-releases / next（黄色 B）",
+      "alpha": "最新 commit（红色 A）"
+    },
+    "defaultTag": "默认",
+    "noVersions": "该渠道暂无版本",
+    "installTitle": "安装插件",
+    "chooseInstance": "选择实例",
+    "chooseProfile": "选择 Profile",
+    "noInstance": "没有可用实例，请先创建实例",
+    "noProfile": "该实例的 DSH_HOME 下没有 Profile，请先创建",
+    "goDownload": "前往创建实例",
+    "startInstall": "开始安装",
+    "installTaskAdded": "已创建安装任务，可在任务页查看进度",
+    "buildScriptsHint": "将自动允许依赖的 buildScripts（onlyBuiltDependencies: *）",
+    "dependency": "依赖",
+    "incompatibility": "冲突",
+    "homepage": "主页",
+    "repository": "仓库",
+    "issues": "Issues",
+    "viewLinks": "链接",
+    "marketError": "插件市场加载失败",
+    "retry": "重试"
   },
   "settings": {
     "title": "设置",
@@ -167,7 +202,20 @@
     "save": "保存",
     "cancel": "取消",
     "saved": "实例已保存",
-    "notFound": "实例不存在"
+    "notFound": "实例不存在",
+    "pluginsDesc": "管理该实例所选 Profile 下的插件：启用 / 禁用，支持多选批量操作。核心 deepseek-ai 官方插件不在此显示。",
+    "pluginsPickProfile": "请先在上方选择 Profile 以查看其中的插件",
+    "pluginsEmpty": "该 Profile 下没有插件",
+    "pluginVersion": "版本",
+    "pluginStatus": "状态",
+    "pluginOn": "启用",
+    "pluginOff": "禁用",
+    "pluginEnabled": "已启用 {name}",
+    "pluginDisabled": "已禁用 {name}",
+    "pluginsBatchEnable": "批量启用（{count}）",
+    "pluginsBatchDisable": "批量禁用（{count}）",
+    "pluginsBatchEnabled": "已启用 {count} 个插件",
+    "pluginsBatchDisabled": "已禁用 {count} 个插件"
   },
   "tasks": {
     "title": "任务管理",

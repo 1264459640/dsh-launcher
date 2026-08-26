@@ -6,11 +6,17 @@ import type {
   DshHome,
   DshInstance,
   DshVersion,
+  InstallPluginInput,
+  InstalledPlugin,
   InstanceStatus,
   LauncherSettings,
+  MarketPlugin,
   NewInstanceInput,
+  PluginChannel,
+  PluginVersionInfo,
   RemoteVersion,
   RuntimeStatus,
+  SetPluginsEnabledInput,
   TaskInfo,
   TaskLog,
   TaskProgress,
@@ -479,6 +485,94 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       saveDb(db)
       return db.settings as T
     }
+    // ---- Plugin marketplace mocks (browser preview) ----
+    case 'fetch_plugin_market': {
+      const q = ((args?.query as string) ?? '').trim().toLowerCase()
+      const all: MarketPlugin[] = [
+        {
+          id: '@dsh-plugin/dsh-approve-for-me',
+          name: 'DSH Approve For Me',
+          description: [{ language: 'zh-CN', content: '审查并自动批准命令执行，新增「替我同意」沙箱权限选项' }],
+          urls: {
+            homepage: 'https://github.com/dsh-plugins/dsh-approve-for-me',
+            repository: 'https://github.com/dsh-plugins/dsh-approve-for-me',
+            issues: 'https://github.com/dsh-plugins/dsh-approve-for-me/issues',
+          },
+          relationship: [{ kind: 'dependency', id: '@dsh-plugin/dsh-loader', versions: '>=1.3.0' }],
+        },
+        {
+          id: '@dsh-plugin/dsh-auxiliary',
+          name: 'DSH Auxiliary',
+          description: [{ language: 'zh-CN', content: '辅助工具集：图像描述、任务看板等' }],
+          urls: {
+            repository: 'https://github.com/dsh-plugins/dsh-auxiliary',
+            issues: 'https://github.com/dsh-plugins/dsh-auxiliary/issues',
+          },
+          relationship: [{ kind: 'dependency', id: '@dsh-plugin/dsh-loader', versions: '>=1.3.0' }],
+        },
+        {
+          id: '@dsh-plugin/dsh-loader',
+          name: 'DSH Loader',
+          description: [{ language: 'zh-CN', content: 'DSH 插件加载器，所有插件的基础' }],
+          urls: { repository: 'https://github.com/dsh-plugins/dsh-loader' },
+        },
+      ]
+      if (!q) return all as T
+      return all.filter((p) => {
+        const desc = Array.isArray(p.description)
+          ? p.description.map((d) => d.content).join(' ')
+          : (p.description ?? '')
+        return (p.id + p.name + desc).toLowerCase().includes(q)
+      }) as T
+    }
+    case 'fetch_plugin_versions': {
+      const pluginId = args?.plugin_id as string
+      const channel = args?.channel as PluginChannel
+      if (channel === 'alpha') {
+        return [
+          { version: 'abc1234def5678', channel: 'alpha', label: '2026-04-10 · fix: something', is_default: true },
+          { version: 'bbb2222ccc3333', channel: 'alpha', label: '2026-04-09 · feat: another', is_default: false },
+        ] as T
+      }
+      if (channel === 'beta') {
+        return [
+          { version: '0.4.0-next.1', channel: 'beta', label: '2026-04-08', is_default: true },
+          { version: '0.4.0-next.0', channel: 'beta', label: '2026-04-01', is_default: false },
+        ] as T
+      }
+      void pluginId
+      return [
+        { version: '1.3.0', channel: 'stable', label: '2026-04-05', is_default: true },
+        { version: '1.2.0', channel: 'stable', label: '2026-03-20', is_default: false },
+      ] as T
+    }
+    case 'list_installed_plugins': {
+      return [
+        { id: '@dsh-plugin/dsh-auxiliary', version: '^0.4.1', enabled: true, cordis_id: 'dsh-auxiliary' },
+        { id: '@dsh-plugin/dsh-thought-buddy', version: '^0.3.1', enabled: false, cordis_id: 'dsh-thought-buddy' },
+      ] as T
+    }
+    case 'set_plugins_enabled':
+      return undefined as T
+    case 'start_install_plugin_task': {
+      const input = args?.input as InstallPluginInput
+      const id = mockNewId('t')
+      const task: TaskInfo = {
+        id,
+        kind: 'install-plugin',
+        label: `安装插件 ${input.pluginId}@${input.version}`,
+        version: input.version,
+        state: 'done',
+        percent: 100,
+        created_at: Date.now(),
+        message: null,
+        instance_id: input.instanceId,
+        instance_name: null,
+        logs: [`mock install ${input.pluginId}@${input.version}`],
+      }
+      mockTasks.set(id, task)
+      return id as T
+    }
     default:
       fail(`mock: unknown command ${cmd}`)
   }
@@ -528,6 +622,15 @@ export const api = {
   getSettings: () => call<LauncherSettings>('get_settings'),
   updateSettings: (settings: Partial<LauncherSettings>) => call<LauncherSettings>('update_settings', { settings }),
   fetchNews: (source: string) => call<string>('fetch_news', { source }),
+
+  // Plugin marketplace
+  fetchPluginMarket: (query?: string) => call<MarketPlugin[]>('fetch_plugin_market', { query: query ?? null }),
+  fetchPluginVersions: (pluginId: string, channel: PluginChannel) =>
+    call<PluginVersionInfo[]>('fetch_plugin_versions', { plugin_id: pluginId, channel }),
+  listInstalledPlugins: (instanceId: string, profile: string) =>
+    call<InstalledPlugin[]>('list_installed_plugins', { instance_id: instanceId, profile }),
+  setPluginsEnabled: (input: SetPluginsEnabledInput) => call<void>('set_plugins_enabled', { input }),
+  startInstallPluginTask: (input: InstallPluginInput) => call<string>('start_install_plugin_task', { input }),
 
   async onInstanceStatus(cb: Listener<InstanceStatus>): Promise<() => void> {
     if (isTauri) {

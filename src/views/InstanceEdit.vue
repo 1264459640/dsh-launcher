@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
-import type { DshInstance } from '@/api/types'
+import type { DshInstance, InstalledPlugin } from '@/api/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -226,6 +226,103 @@ async function confirmDeleteProfile(name: string) {
     busyProfile.value = null
   }
 }
+
+// --- Plugins tab ---------------------------------------------------------------
+
+const pluginProfile = ref<string>('')
+const installedPlugins = ref<InstalledPlugin[]>([])
+const pluginsLoading = ref(false)
+const selectedPlugins = ref<string[]>([])
+const pluginsBusy = ref(false)
+
+const visiblePlugins = computed(() =>
+  // Backend already excludes @deepseek-ai/*; double-filter for safety.
+  installedPlugins.value.filter((p) => !p.id.startsWith('@deepseek-ai/')),
+)
+
+watch([pluginProfile, homeId], async () => {
+  await loadPlugins()
+})
+
+async function loadPlugins() {
+  installedPlugins.value = []
+  selectedPlugins.value = []
+  if (!editingId.value || !pluginProfile.value) return
+  pluginsLoading.value = true
+  try {
+    installedPlugins.value = await api.listInstalledPlugins(editingId.value, pluginProfile.value)
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    pluginsLoading.value = false
+  }
+}
+
+async function onTogglePlugin(p: InstalledPlugin, enabled: boolean) {
+  if (!editingId.value || !pluginProfile.value) return
+  pluginsBusy.value = true
+  try {
+    await api.setPluginsEnabled({
+      instanceId: editingId.value,
+      profile: pluginProfile.value,
+      pluginIds: [p.id],
+      enabled,
+    })
+    p.enabled = enabled
+    Message.success(
+      enabled
+        ? t('instanceEdit.pluginEnabled', { name: p.id })
+        : t('instanceEdit.pluginDisabled', { name: p.id }),
+    )
+  } catch (e) {
+    Message.error(String(e))
+    await loadPlugins()
+  } finally {
+    pluginsBusy.value = false
+  }
+}
+
+function onSwitchChange(p: InstalledPlugin, val: string | number | boolean) {
+  onTogglePlugin(p, val === true)
+}
+
+async function batchSetEnabled(enabled: boolean) {
+  if (!editingId.value || !pluginProfile.value || selectedPlugins.value.length === 0) return
+  pluginsBusy.value = true
+  const ids = [...selectedPlugins.value]
+  try {
+    await api.setPluginsEnabled({
+      instanceId: editingId.value,
+      profile: pluginProfile.value,
+      pluginIds: ids,
+      enabled,
+    })
+    for (const p of installedPlugins.value) {
+      if (ids.includes(p.id)) p.enabled = enabled
+    }
+    selectedPlugins.value = []
+    Message.success(
+      enabled
+        ? t('instanceEdit.pluginsBatchEnabled', { count: ids.length })
+        : t('instanceEdit.pluginsBatchDisabled', { count: ids.length }),
+    )
+  } catch (e) {
+    Message.error(String(e))
+    await loadPlugins()
+  } finally {
+    pluginsBusy.value = false
+  }
+}
+
+function onSelectionChange(rowKeys: (string | number)[]) {
+  selectedPlugins.value = rowKeys.map(String)
+}
+
+const rowSelection = {
+  type: 'checkbox' as const,
+  showCheckedAll: true,
+  onlyCurrent: true,
+}
 </script>
 
 <template>
@@ -392,10 +489,97 @@ async function confirmDeleteProfile(name: string) {
             </div>
           </div>
 
-          <!-- Plugins (coming soon) -->
-          <div v-else class="plugins-soon">
-            <div class="coming-text">{{ t('plugins.coming') }}</div>
-            <div class="coming-desc">{{ t('plugins.desc') }}</div>
+          <!-- Plugins -->
+          <div v-else class="dl-card edit-card">
+            <h4 class="env-title">{{ t('instanceEdit.tabs.plugins') }}</h4>
+            <p class="env-desc">{{ t('instanceEdit.pluginsDesc') }}</p>
+
+            <template v-if="homeId && homeId !== DEDICATED">
+              <div class="plugins-toolbar">
+                <a-select
+                  v-model="pluginProfile"
+                  :placeholder="t('plugins.chooseProfile')"
+                  style="width: 220px"
+                >
+                  <a-option v-for="p in profiles" :key="p" :value="p">{{ p }}</a-option>
+                </a-select>
+                <a-button
+                  size="small"
+                  type="text"
+                  :disabled="!pluginProfile"
+                  :loading="pluginsLoading"
+                  @click="loadPlugins"
+                >
+                  ⟳
+                </a-button>
+              </div>
+
+              <template v-if="pluginProfile">
+                <a-table
+                  :data="visiblePlugins"
+                  :loading="pluginsLoading"
+                  :row-selection="rowSelection"
+                  :row-key="(record: InstalledPlugin) => record.id"
+                  :pagination="false"
+                  class="plugins-table"
+                  @selection-change="onSelectionChange"
+                >
+                  <template #columns>
+                    <a-table-column title="ID" data-index="id" :width="320">
+                      <template #cell="{ record }">
+                        <span class="plugin-cell-id">{{ record.id }}</span>
+                      </template>
+                    </a-table-column>
+                    <a-table-column :title="t('instanceEdit.pluginVersion')" data-index="version" :width="140">
+                      <template #cell="{ record }">
+                        <span v-if="record.version">{{ record.version }}</span>
+                        <span v-else class="plugin-no-version">-</span>
+                      </template>
+                    </a-table-column>
+                    <a-table-column :title="t('instanceEdit.pluginStatus')" data-index="enabled" :width="120">
+                      <template #cell="{ record }">
+                        <a-switch
+                          :model-value="record.enabled"
+                          :disabled="pluginsBusy"
+                          :checked-text="t('instanceEdit.pluginOn')"
+                          :unchecked-text="t('instanceEdit.pluginOff')"
+                          @change="onSwitchChange(record, $event)"
+                        />
+                      </template>
+                    </a-table-column>
+                  </template>
+                </a-table>
+
+                <div class="plugins-batch">
+                  <a-button
+                    size="small"
+                    type="primary"
+                    :disabled="selectedPlugins.length === 0 || pluginsBusy"
+                    @click="batchSetEnabled(true)"
+                  >
+                    {{ t('instanceEdit.pluginsBatchEnable', { count: selectedPlugins.length }) }}
+                  </a-button>
+                  <a-button
+                    size="small"
+                    status="danger"
+                    :disabled="selectedPlugins.length === 0 || pluginsBusy"
+                    @click="batchSetEnabled(false)"
+                  >
+                    {{ t('instanceEdit.pluginsBatchDisable', { count: selectedPlugins.length }) }}
+                  </a-button>
+                </div>
+
+                <a-empty
+                  v-if="!pluginsLoading && visiblePlugins.length === 0"
+                  :description="t('instanceEdit.pluginsEmpty')"
+                />
+              </template>
+              <a-empty v-else :description="t('instanceEdit.pluginsPickProfile')" />
+            </template>
+
+            <a-alert v-else type="info">
+              {{ t('instanceEdit.profilesNeedHome') }}
+            </a-alert>
           </div>
         </div>
       </a-scrollbar>
@@ -522,29 +706,30 @@ async function confirmDeleteProfile(name: string) {
   margin-top: 4px;
 }
 
-.plugins-soon {
+.plugins-toolbar {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
-  min-height: 420px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
-.coming-text {
-  font-size: 44px;
-  font-weight: 800;
-  letter-spacing: 1px;
-  white-space: nowrap;
-  background: linear-gradient(90deg, #165dff, #722ed1, #f53f3f);
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  user-select: none;
+.plugins-table {
+  margin-bottom: 12px;
 }
 
-.coming-desc {
-  color: var(--color-text-3);
-  font-size: 14px;
+.plugin-cell-id {
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.plugin-no-version {
+  color: var(--color-text-4);
+}
+
+.plugins-batch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .footer-actions {

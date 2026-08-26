@@ -7,10 +7,20 @@ import type {
   DshVersion,
   InstanceStatus,
   LauncherSettings,
+  MarketPlugin,
+  PluginChannel,
+  PluginVersionInfo,
   RemoteVersion,
   RuntimeStatus,
   TaskInfo,
 } from '@/api/types'
+
+/** Wizard state carried across the plugin install flow. */
+export interface PluginWizardState {
+  plugin: MarketPlugin
+  channel: PluginChannel
+  version: PluginVersionInfo | null
+}
 
 interface LauncherState {
   homes: DshHome[]
@@ -22,6 +32,10 @@ interface LauncherState {
   remoteVersions: RemoteVersion[]
   remoteLoading: boolean
   runtime: RuntimeStatus | null
+  marketPlugins: MarketPlugin[]
+  marketLoading: boolean
+  marketLoadedAt: number | null
+  pluginWizard: PluginWizardState | null
   loaded: boolean
 }
 
@@ -43,6 +57,10 @@ export const useLauncherStore = defineStore('launcher', {
     remoteVersions: [],
     remoteLoading: false,
     runtime: null,
+    marketPlugins: [],
+    marketLoading: false,
+    marketLoadedAt: null,
+    pluginWizard: null,
     loaded: false,
   }),
 
@@ -157,6 +175,21 @@ export const useLauncherStore = defineStore('launcher', {
         Message.error(String(e))
       } finally {
         this.remoteLoading = false
+      }
+    },
+
+    /** Load the plugin marketplace catalog (cached until force=true). */
+    async refreshMarketPlugins(force = false) {
+      if (this.marketLoading) return
+      if (!force && this.marketPlugins.length > 0 && this.marketLoadedAt) return
+      this.marketLoading = true
+      try {
+        this.marketPlugins = await api.fetchPluginMarket()
+        this.marketLoadedAt = Date.now()
+      } catch (e) {
+        Message.error(String(e))
+      } finally {
+        this.marketLoading = false
       }
     },
   },

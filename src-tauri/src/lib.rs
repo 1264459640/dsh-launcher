@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod plugins;
 mod process;
 mod runtime;
 mod tasks;
@@ -96,6 +97,11 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::fetch_news,
+            plugins::fetch_plugin_market,
+            plugins::fetch_plugin_versions,
+            plugins::list_installed_plugins,
+            plugins::set_plugins_enabled,
+            plugins::start_install_plugin_task,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

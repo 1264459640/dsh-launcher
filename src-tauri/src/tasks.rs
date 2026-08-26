@@ -856,3 +856,166 @@ fn emit_log(app: &AppHandle, id: &str, line: &str) {
         },
     );
 }
+
+// ---------------------------------------------------------------------------
+// Shared helpers reused by other modules (e.g. plugins.rs install tasks)
+// ---------------------------------------------------------------------------
+
+pub(crate) fn now_millis_pub() -> i64 {
+    now_millis()
+}
+
+pub(crate) fn emit_progress_pub(
+    app: &AppHandle,
+    id: &str,
+    state: TaskState,
+    percent: u32,
+    message: Option<String>,
+    instance_id: Option<String>,
+) {
+    emit_progress(app, id, state, percent, message, instance_id);
+}
+
+pub(crate) fn push_log_locked_pub(task: &mut TaskInfo, line: &str) {
+    push_log_locked(task, line);
+}
+
+/// Append a log line to a running task and stream it to the frontend.
+pub(crate) async fn push_task_log_pub(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+    line: &str,
+) {
+    {
+        let mut tasks = state.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            push_log_locked(task, line);
+        }
+    }
+    emit_log(app, task_id, line);
+}
+
+pub(crate) async fn ensure_pnpm_pub(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+) -> Result<std::path::PathBuf, String> {
+    ensure_pnpm(app, state, task_id).await
+}
+
+/// Runs a piped child command as a task: streams stdout/stderr into the task
+/// log, exposes the child for cancellation, and nudges the percent upward
+/// while it runs. Returns Err when the command fails or is cancelled.
+pub(crate) async fn run_streamed_command(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+    mut cmd: tokio::process::Command,
+    what: &str,
+) -> Result<(), String> {
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("{what} 启动失败: {e}（请确认已安装 Node.js 与 pnpm）"))?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let shared_child: Arc<Mutex<Option<tokio::process::Child>>> = Arc::new(Mutex::new(Some(child)));
+
+    {
+        let mut tasks = state.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.child = Some(shared_child.clone());
+        }
+    }
+
+    for pipe in [stdout.map(StreamPipe::Out), stderr.map(StreamPipe::Err)]
+        .into_iter()
+        .flatten()
+    {
+        let app2 = app.clone();
+        let tid = task_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            stream_pipe(app2, tid, pipe).await;
+        });
+    }
+
+    // Heartbeat keeps the percent moving while the command is quiet.
+    {
+        let app2 = app.clone();
+        let tid = task_id.to_string();
+        let hb_child = shared_child.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                let still_running = {
+                    let mut guard = hb_child.lock().await;
+                    match guard.as_mut() {
+                        Some(c) => matches!(c.try_wait(), Ok(None)),
+                        None => false,
+                    }
+                };
+                if !still_running {
+                    break;
+                }
+                let state = app2.state::<AppState>();
+                let mut tasks = state.tasks.lock().await;
+                let Some(task) = tasks.get_mut(&tid) else {
+                    break;
+                };
+                if task.state != TaskState::Running {
+                    break;
+                }
+                if task.percent < 90 {
+                    task.percent = (task.percent + 2).min(90);
+                } else if task.percent < 99 {
+                    task.percent += 1;
+                } else {
+                    break;
+                }
+                let pct = task.percent;
+                drop(tasks);
+                emit_progress(&app2, &tid, TaskState::Running, pct, None, None);
+            }
+        });
+    }
+
+    let status = loop {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let mut guard = shared_child.lock().await;
+        let Some(child) = guard.as_mut() else {
+            return Err("任务已取消".to_string());
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => continue,
+            Err(e) => return Err(format!("{what} 等待失败: {e}")),
+        }
+    };
+
+    // Clear the child handle so a later cancel is a no-op.
+    {
+        let mut tasks = state.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.child = None;
+        }
+    }
+
+    if !status.success() {
+        let logs = {
+            let tasks = state.tasks.lock().await;
+            tasks
+                .get(task_id)
+                .map(|t| t.logs.clone())
+                .unwrap_or_default()
+        };
+        let last = logs
+            .iter()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("{what} 退出码 {status}"));
+        return Err(format!("{what} 失败: {last}"));
+    }
+    Ok(())
+}
