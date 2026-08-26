@@ -514,159 +514,61 @@ async fn install_version_streamed(
 
     // pnpm (>=10) ignores dependency build scripts by default, which would
     // skip native modules like node-pty / koffi. A workspace manifest inside
-    // the install dir opts back into running all build scripts.
-    let ws_manifest = dir.join("pnpm-workspace.yaml");
-    let ws_content = "onlyBuiltDependencies:\n  - '*'\n";
-    if !ws_manifest.exists() {
-        std::fs::write(&ws_manifest, ws_content)
-            .map_err(|e| format!("写入 pnpm-workspace.yaml 失败: {e}"))?;
-    }
+    // the install dir opts back into running all build scripts; on pnpm 11
+    // this also carries the `allowBuilds` section (see
+    // crate::plugins::ensure_build_scripts_allowed).
+    crate::plugins::ensure_build_scripts_allowed(&dir)?;
 
     // Make sure a pnpm executable is available before installing: use the
     // system one if present, otherwise bootstrap the latest pnpm into the
     // launcher's data dir via npm.
     let pnpm_prog = ensure_pnpm(app, state, task_id).await?;
 
-    let mut cmd = tokio::process::Command::new(&pnpm_prog);
-    crate::process::hide_console(&mut cmd);
-    // Network robustness: the default fetch timeout (60s) and retries (2)
-    // are too tight for large native binaries (e.g. sharp-win32-x64), which
-    // fail with "error (23) ... aborted due to timeout" on flaky connections.
-    cmd.args(["install", "--prefix"])
-        .arg(&dir)
-        .arg("--store-dir")
-        .arg(&store_dir)
-        .args(["--loglevel=http"])
-        .args([
-            "--fetch-timeout",
-            "300000", // 5 min per request
-            "--fetch-retries",
-            "5",
-            "--fetch-retry-maxtimeout",
-            "120000",
-            "--network-concurrency",
-            "4",
-        ]);
-    // Optional npm registry mirror (e.g. npmmirror) via DSH_NPM_REGISTRY.
-    if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
-        let registry = registry.trim().to_string();
-        if !registry.is_empty() {
-            cmd.args(["--registry", &registry]);
-        }
-    }
-    cmd.arg(format!("@deepseek-ai/dsh@{version}"))
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("pnpm 启动失败: {e}（请确认已安装 Node.js 与 pnpm）"))?;
-
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let shared_child: Arc<Mutex<Option<tokio::process::Child>>> = Arc::new(Mutex::new(Some(child)));
-
-    // Expose the child for cancellation.
-    {
-        let mut tasks = state.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(task_id) {
-            task.child = Some(shared_child.clone());
-        }
-    }
-
-    // Stream both pipes into the task log.
-    for pipe in [stdout.map(StreamPipe::Out), stderr.map(StreamPipe::Err)]
-        .into_iter()
-        .flatten()
-    {
-        let app2 = app.clone();
-        let tid = task_id.to_string();
-        tauri::async_runtime::spawn(async move {
-            stream_pipe(app2, tid, pipe).await;
-        });
-    }
-
-    // Heartbeat: after the metadata phase npm goes quiet while installing /
-    // compiling native modules, so the line-counted percent would freeze.
-    // Keep nudging the percent upward (90 → 99) while the process is alive.
-    {
-        let app2 = app.clone();
-        let tid = task_id.to_string();
-        let hb_child = shared_child.clone();
-        tauri::async_runtime::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-                let still_running = {
-                    let mut guard = hb_child.lock().await;
-                    match guard.as_mut() {
-                        Some(c) => matches!(c.try_wait(), Ok(None)),
-                        None => false,
-                    }
-                };
-                if !still_running {
-                    break;
-                }
-                let state = app2.state::<AppState>();
-                let mut tasks = state.tasks.lock().await;
-                let Some(task) = tasks.get_mut(&tid) else {
-                    break;
-                };
-                if task.state != TaskState::Running {
-                    break;
-                }
-                if task.percent < 90 {
-                    task.percent = (task.percent + 2).min(90);
-                } else if task.percent < 99 {
-                    task.percent += 1;
-                } else {
-                    break; // capped; wait for the final 100 on success
-                }
-                let pct = task.percent;
-                drop(tasks);
-                emit_progress(&app2, &tid, TaskState::Running, pct, None, None);
+    // pnpm 11 blocks dependency build scripts unless every package with an
+    // install script is listed under `allowBuilds`. On the first attempt it
+    // writes a `set this to true or false` placeholder into
+    // pnpm-workspace.yaml and fails with ERR_PNPM_IGNORED_BUILDS; we convert
+    // that placeholder to `true` and retry once so native deps (node-pty,
+    // koffi, …) actually build.
+    for attempt in 1..=2 {
+        let mut cmd = tokio::process::Command::new(&pnpm_prog);
+        crate::process::hide_console(&mut cmd);
+        // Network robustness: the default fetch timeout (60s) and retries (2)
+        // are too tight for large native binaries (e.g. sharp-win32-x64),
+        // which fail with "error (23) ... aborted due to timeout" on flaky
+        // connections.
+        cmd.args(["install", "--prefix"])
+            .arg(&dir)
+            .arg("--store-dir")
+            .arg(&store_dir)
+            .args(["--loglevel=http"])
+            .args([
+                "--fetch-timeout",
+                "300000", // 5 min per request
+                "--fetch-retries",
+                "5",
+                "--fetch-retry-maxtimeout",
+                "120000",
+                "--network-concurrency",
+                "4",
+            ]);
+        // Optional npm registry mirror (e.g. npmmirror) via DSH_NPM_REGISTRY.
+        if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
+            let registry = registry.trim().to_string();
+            if !registry.is_empty() {
+                cmd.args(["--registry", &registry]);
             }
-        });
-    }
-
-    // Wait for npm to finish by polling try_wait (the heartbeat and
-    // cancellation also access the shared child).
-    let status = loop {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let mut guard = shared_child.lock().await;
-        let Some(child) = guard.as_mut() else {
-            return Err("任务已取消".to_string());
-        };
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => continue,
-            Err(e) => return Err(format!("pnpm 等待失败: {e}")),
         }
-    };
+        cmd.arg(format!("@deepseek-ai/dsh@{version}"));
 
-    if !status.success() {
-        let logs = {
-            let tasks = state.tasks.lock().await;
-            tasks
-                .get(task_id)
-                .map(|t| t.logs.clone())
-                .unwrap_or_default()
-        };
-        // Pick a meaningful error line instead of the last line (which is
-        // often a stack-trace tail like "at process.processTimers (...)").
-        let summary = logs
-            .iter()
-            .rev()
-            .find(|l| {
-                let s = l.to_lowercase();
-                s.contains("err_pnpm")
-                    || s.contains("error")
-                    || s.contains("aborted")
-                    || s.contains("failed")
-                    || s.contains("timeout")
-            })
-            .cloned()
-            .unwrap_or_else(|| logs.last().cloned().unwrap_or_default());
-        return Err(format!("pnpm 安装失败（{}）", summary));
+        match run_streamed_command(app, state, task_id, cmd, "pnpm install").await {
+            Ok(()) => break,
+            Err(_e) if attempt == 1 && task_log_mentions_ignored_builds(state, task_id) => {
+                push_task_log(app, state, task_id, "pnpm 11 拦截了构建脚本，正在批准 allowBuilds 后重试…").await;
+                crate::plugins::ensure_build_scripts_allowed(&dir)?;
+            }
+            Err(e) => return Err(e),
+        }
     }
 
     let record = DshVersion {
@@ -681,6 +583,20 @@ async fn install_version_streamed(
     cfg.versions.push(record.clone());
     crate::commands::save_state(state, &cfg)?;
     Ok(record)
+}
+
+/// Whether the task's streamed log mentions pnpm's ignored-build-scripts
+/// failure (ERR_PNPM_IGNORED_BUILDS / "Ignored build scripts").
+fn task_log_mentions_ignored_builds(state: &State<'_, AppState>, task_id: &str) -> bool {
+    let tasks = state.tasks.try_lock().map(|t| t.clone()).ok();
+    tasks
+        .and_then(|t| t.get(task_id).map(|t| t.logs.clone()))
+        .map(|logs| {
+            logs.iter().any(|l| {
+                l.contains("ERR_PNPM_IGNORED_BUILDS") || l.contains("Ignored build scripts")
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Returns a usable pnpm executable. Prefers the system pnpm; falls back to
@@ -1009,12 +925,29 @@ pub(crate) async fn run_streamed_command(
                 .map(|t| t.logs.clone())
                 .unwrap_or_default()
         };
+        // Prefer a meaningful error line (pnpm error codes, "error:",
+        // "aborted", "failed", "timeout") over the last line, which is often
+        // a stack-trace tail. Keep the pnpm error code (e.g.
+        // ERR_PNPM_IGNORED_BUILDS) visible so callers can react to it.
         let last = logs
             .iter()
             .rev()
-            .find(|l| !l.trim().is_empty())
+            .find(|l| {
+                let s = l.to_lowercase();
+                s.contains("err_pnpm")
+                    || s.contains("error")
+                    || s.contains("aborted")
+                    || s.contains("failed")
+                    || s.contains("timeout")
+            })
             .cloned()
-            .unwrap_or_else(|| format!("{what} 退出码 {status}"));
+            .unwrap_or_else(|| {
+                logs.iter()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| format!("{what} 退出码 {status}"))
+            });
         return Err(format!("{what} 失败: {last}"));
     }
     Ok(())

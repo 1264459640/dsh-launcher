@@ -856,54 +856,145 @@ async fn install_into_profile(
 ) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("创建 profile 目录失败: {e}"))?;
 
-    // Opt into dependency build scripts (pnpm>=10 disables them by default).
-    let ws_manifest = dir.join("pnpm-workspace.yaml");
-    if !ws_manifest.exists() {
-        let content = "packages:\n  - .\nonlyBuiltDependencies:\n  - '*'\n";
-        std::fs::write(&ws_manifest, content)
-            .map_err(|e| format!("写入 pnpm-workspace.yaml 失败: {e}"))?;
-    } else {
-        // Ensure onlyBuiltDependencies is present without clobbering packages.
-        let raw = std::fs::read_to_string(&ws_manifest)
-            .map_err(|e| format!("读取 pnpm-workspace.yaml 失败: {e}"))?;
-        if !raw.contains("onlyBuiltDependencies") {
-            let merged = format!("{raw}\nonlyBuiltDependencies:\n  - '*'\n");
-            std::fs::write(&ws_manifest, merged)
-                .map_err(|e| format!("更新 pnpm-workspace.yaml 失败: {e}"))?;
-        }
-    }
+    // Opt into dependency build scripts. pnpm>=10 uses `onlyBuiltDependencies`,
+    // while pnpm 11 (which writes the `set this to true or false` placeholder
+    // into `allowBuilds` for every ignored build and fails with
+    // ERR_PNPM_IGNORED_BUILDS) requires `allowBuilds: <name>: true` entries.
+    // Write both so the profile works on any pnpm version.
+    ensure_build_scripts_allowed(dir)?;
 
     let store_dir = state.data_dir.join(".pnpm-store");
     let pnpm_prog = ensure_pnpm_for_plugins(app, state, task_id).await?;
 
-    let mut cmd = tokio::process::Command::new(&pnpm_prog);
-    crate::process::hide_console(&mut cmd);
-    cmd.args(["add", spec])
-        .arg("--prefix")
-        .arg(dir)
-        .arg("--store-dir")
-        .arg(&store_dir)
-        .args(["--loglevel=http"])
-        .args([
-            "--fetch-timeout",
-            "300000",
-            "--fetch-retries",
-            "5",
-            "--fetch-retry-maxtimeout",
-            "120000",
-            "--network-concurrency",
-            "4",
-        ]);
-    if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
-        let registry = registry.trim().to_string();
-        if !registry.is_empty() {
-            cmd.args(["--registry", &registry]);
+    // pnpm 11 blocks dependency build scripts unless every package with an
+    // install script is listed under `allowBuilds`. On the first attempt it
+    // writes a `set this to true or false` placeholder into
+    // pnpm-workspace.yaml and fails with ERR_PNPM_IGNORED_BUILDS; we convert
+    // that placeholder to `true` and retry once so native deps (node-pty,
+    // koffi, esbuild, sharp…) actually build.
+    for attempt in 1..=2 {
+        let mut cmd = tokio::process::Command::new(&pnpm_prog);
+        crate::process::hide_console(&mut cmd);
+        cmd.args(["add", spec])
+            .arg("--prefix")
+            .arg(dir)
+            .arg("--store-dir")
+            .arg(&store_dir)
+            .args(["--loglevel=http"])
+            .args([
+                "--fetch-timeout",
+                "300000",
+                "--fetch-retries",
+                "5",
+                "--fetch-retry-maxtimeout",
+                "120000",
+                "--network-concurrency",
+                "4",
+            ]);
+        if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
+            let registry = registry.trim().to_string();
+            if !registry.is_empty() {
+                cmd.args(["--registry", &registry]);
+            }
+        }
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        match crate::tasks::run_streamed_command(app, state, task_id, cmd, "pnpm add").await {
+            Ok(()) => return Ok(()),
+            Err(_e) if attempt == 1 && task_log_mentions_ignored_builds(state, task_id) => {
+                crate::tasks::push_task_log_pub(
+                    app,
+                    state,
+                    task_id,
+                    "pnpm 11 拦截了依赖构建脚本，正在批准 allowBuilds 后重试…",
+                )
+                .await;
+                ensure_build_scripts_allowed(dir)?;
+            }
+            Err(e) => return Err(e),
         }
     }
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+    unreachable!("attempt loop covers both attempts")
+}
 
-    crate::tasks::run_streamed_command(app, state, task_id, cmd, "pnpm add").await
+/// Whether the task's streamed log mentions pnpm's ignored-build-scripts
+/// failure (ERR_PNPM_IGNORED_BUILDS / "Ignored build scripts"). The error
+/// text returned by run_streamed_command only carries the last meaningful
+/// line, so we inspect the full log instead.
+fn task_log_mentions_ignored_builds(state: &State<'_, AppState>, task_id: &str) -> bool {
+    let tasks = state.tasks.try_lock().map(|t| t.clone()).ok();
+    tasks
+        .and_then(|t| t.get(task_id).map(|t| t.logs.clone()))
+        .map(|logs| {
+            logs.iter().any(|l| {
+                l.contains("ERR_PNPM_IGNORED_BUILDS") || l.contains("Ignored build scripts")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Make sure a profile's pnpm-workspace.yaml opts into dependency build
+/// scripts on both pnpm 10 (onlyBuiltDependencies) and pnpm 11 (allowBuilds).
+///
+/// pnpm 11 writes `allowBuilds: <name>: set this to true or false` for every
+/// dependency whose build script it ignored, then fails the install with
+/// ERR_PNPM_IGNORED_BUILDS. This converts those placeholders to `true` and
+/// keeps the old field around for pnpm ≤10, so a subsequent install actually
+/// runs the native build scripts (node-pty, koffi, esbuild, sharp, …).
+pub(crate) fn ensure_build_scripts_allowed(dir: &std::path::Path) -> Result<(), String> {
+    let ws_manifest = dir.join("pnpm-workspace.yaml");
+    let raw = if ws_manifest.exists() {
+        std::fs::read_to_string(&ws_manifest).map_err(|e| format!("读取 pnpm-workspace.yaml 失败: {e}"))?
+    } else {
+        String::new()
+    };
+
+    // Base document: `packages` is required for pnpm to treat the dir as a
+    // workspace (needed for allowBuilds to be read from this file).
+    let mut lines: Vec<String> = if raw.trim().is_empty() {
+        vec!["packages:".to_string(), "  - .".to_string()]
+    } else {
+        raw.lines().map(|l| l.to_string()).collect()
+    };
+
+    // 1. Convert pnpm-11 placeholder values ("set this to true or false") to
+    //    real booleans so the next install builds those packages.
+    let mut changed = false;
+    for line in lines.iter_mut() {
+        if line.contains("set this to true or false") {
+            *line = line.replace("set this to true or false", "true");
+            changed = true;
+        }
+    }
+
+    // 2. Ensure the legacy `onlyBuiltDependencies: ['*']` block exists
+    //    (pnpm ≤10 reads only this field).
+    let joined = lines.join("\n");
+    if !joined.contains("onlyBuiltDependencies") {
+        lines.push(String::new());
+        lines.push("onlyBuiltDependencies:".to_string());
+        lines.push("  - '*'".to_string());
+        changed = true;
+    }
+
+    // 3. Ensure an `allowBuilds:` section exists so pnpm 11 has somewhere to
+    //    record newly-ignored builds (it auto-appends entries on failure).
+    if !lines.iter().any(|l| l.trim_start().starts_with("allowBuilds:")) {
+        lines.push(String::new());
+        lines.push("allowBuilds:".to_string());
+        changed = true;
+    }
+
+    if changed {
+        let out = lines.join("\n");
+        if !out.ends_with('\n') {
+            lines.push(String::new());
+        }
+        std::fs::write(&ws_manifest, lines.join("\n"))
+            .map_err(|e| format!("写入 pnpm-workspace.yaml 失败: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Ensure pnpm is available (delegates to the same logic as version installs).
@@ -1255,5 +1346,39 @@ mod tests {
             );
             assert!(!page2.versions[0].is_default, "only page 1 has the default");
         }
+    }
+
+    #[test]
+    fn ensure_build_scripts_allowed_converts_placeholders_and_adds_sections() {
+        let dir = std::env::temp_dir().join(format!("dsh-plugins-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Fresh profile: no workspace file yet -> packages + both sections.
+        ensure_build_scripts_allowed(&dir).unwrap();
+        let fresh = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
+        assert!(fresh.contains("packages:"), "fresh: {fresh}");
+        assert!(fresh.contains("onlyBuiltDependencies"), "fresh: {fresh}");
+        assert!(fresh.contains("allowBuilds:"), "fresh: {fresh}");
+
+        // pnpm 11 left a placeholder behind after ERR_PNPM_IGNORED_BUILDS.
+        std::fs::write(
+            dir.join("pnpm-workspace.yaml"),
+            "packages:\n  - .\nallowBuilds:\n  node-pty: set this to true or false\n",
+        )
+        .unwrap();
+        ensure_build_scripts_allowed(&dir).unwrap();
+        let fixed = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
+        assert!(fixed.contains("node-pty: true"), "fixed: {fixed}");
+        assert!(!fixed.contains("set this to true or false"), "fixed: {fixed}");
+        // Legacy section added without clobbering existing content.
+        assert!(fixed.contains("onlyBuiltDependencies"), "fixed: {fixed}");
+
+        // Idempotent: second run leaves the file unchanged.
+        let before = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
+        ensure_build_scripts_allowed(&dir).unwrap();
+        let after = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
+        assert_eq!(before, after, "must be idempotent");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
