@@ -126,11 +126,25 @@ async function startInstall() {
           </a-empty>
         </div>
         <template v-else>
-          <a-radio-group v-model="instanceId" type="button">
-            <a-radio v-for="inst in instances" :key="inst.id" :value="inst.id">
-              {{ inst.name }}
-            </a-radio>
-          </a-radio-group>
+          <a-select
+            v-model="instanceId"
+            :placeholder="t('plugins.chooseInstance')"
+            style="max-width: 320px"
+            allow-clear
+          >
+            <a-option v-for="inst in instances" :key="inst.id" :value="inst.id">
+              <span class="option-line">
+                {{ inst.name }}
+                <a-tag
+                  v-if="store.statusOf(inst.id).state === 'running'"
+                  size="small"
+                  color="green"
+                >
+                  {{ t('home.status.running') }}
+                </a-tag>
+              </span>
+            </a-option>
+          </a-select>
 
           <div class="profile-section">
             <div class="profile-label">{{ t('plugins.chooseProfile') }}</div>
@@ -259,6 +273,12 @@ async function startInstall() {
 .build-hint {
   font-size: 12px;
   color: var(--color-text-3);
+}
+
+.option-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .wizard-actions {
