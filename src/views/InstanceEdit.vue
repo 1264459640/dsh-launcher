@@ -519,7 +519,7 @@ const rowSelection = {
                   :data="visiblePlugins"
                   :loading="pluginsLoading"
                   :row-selection="rowSelection"
-                  :row-key="(record: InstalledPlugin) => record.id"
+                  row-key="id"
                   :pagination="false"
                   class="plugins-table"
                   @selection-change="onSelectionChange"
