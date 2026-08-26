@@ -404,6 +404,42 @@ pub fn create_profile(
     Ok(name)
 }
 
+/// Copies an existing profile directory to a new name inside the same HOME.
+/// The copy is only materialized after the new name is validated, mirroring
+/// create_profile's copy-from-template behavior.
+#[tauri::command(rename_all = "snake_case")]
+pub fn copy_profile(
+    state: State<'_, AppState>,
+    home_id: String,
+    source: String,
+    name: String,
+) -> Result<String, String> {
+    let name = name.trim().to_string();
+    validate_profile_name(&name)?;
+
+    let profiles_dir = {
+        let cfg = state.config.lock().unwrap();
+        let home = cfg
+            .homes
+            .iter()
+            .find(|h| h.id == home_id)
+            .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+        home.path.join("profiles")
+    };
+
+    let from = profiles_dir.join(&source);
+    if !from.is_dir() {
+        return Err(format!("Profile「{source}」不存在"));
+    }
+    let to = profiles_dir.join(&name);
+    if to.exists() {
+        return Err(format!("Profile「{name}」已存在"));
+    }
+
+    copy_dir_recursive(&from, &to).map_err(|e| format!("复制 Profile 失败: {e}"))?;
+    Ok(name)
+}
+
 /// Validates a profile name (shared by create/rename).
 fn validate_profile_name(name: &str) -> Result<(), String> {
     let name = name.trim();

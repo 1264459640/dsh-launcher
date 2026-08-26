@@ -410,6 +410,23 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       mockProfiles[homeId].push(name)
       return name as T
     }
+    case 'copy_profile': {
+      const homeId = String(args?.home_id)
+      const source = String(args?.source ?? '')
+      const name = String(args?.name ?? '').trim()
+      if (!name) fail('Profile 名称不能为空')
+      if (name === '__temp__' || name === 'node_modules') fail(`「${name}」为保留名称，不能使用`)
+      if (!/^[A-Za-z0-9._-]+$/.test(name)) fail('Profile 名称只能包含字母、数字、-、_、.')
+      const home = db.homes.find((h) => h.id === homeId)
+      const base: string[] = []
+      if (home && home.path.endsWith('.dsh')) base.push(...['web', 'demo', 'pack'])
+      mockProfiles[homeId] = mockProfiles[homeId] ?? []
+      const exists = (n: string) => base.includes(n) || mockProfiles[homeId].includes(n)
+      if (!exists(source)) fail(`Profile「${source}」不存在`)
+      if (exists(name)) fail(`Profile「${name}」已存在`)
+      mockProfiles[homeId].push(name)
+      return name as T
+    }
     case 'rename_profile': {
       const homeId = String(args?.home_id)
       const oldName = String(args?.old_name ?? '')
@@ -668,6 +685,8 @@ export const api = {
   listProfiles: (homeId: string) => call<string[]>('list_profiles', { home_id: homeId }),
   createProfile: (homeId: string, name: string) =>
     call<string>('create_profile', { home_id: homeId, name }),
+  copyProfile: (homeId: string, source: string, name: string) =>
+    call<string>('copy_profile', { home_id: homeId, source, name }),
   renameProfile: (homeId: string, oldName: string, newName: string) =>
     call<string>('rename_profile', { home_id: homeId, old_name: oldName, new_name: newName }),
   deleteProfile: (homeId: string, name: string) =>

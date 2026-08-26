@@ -181,6 +181,40 @@ const renamingProfile = ref<string | null>(null)
 const renameValue = ref('')
 const busyProfile = ref<string | null>(null)
 
+// --- Profile copy ---------------------------------------------------------------
+
+const copyingProfile = ref<string | null>(null)
+const copyProfileName = ref('')
+const copyProfileBusy = ref(false)
+
+function startCopyProfile(name: string) {
+  copyingProfile.value = name
+  copyProfileName.value = `${name}-copy`
+}
+
+function cancelCopyProfile() {
+  copyingProfile.value = null
+  copyProfileName.value = ''
+}
+
+async function confirmCopyProfile() {
+  if (!homeId.value || !copyingProfile.value) return
+  const source = copyingProfile.value
+  const newName = copyProfileName.value.trim()
+  if (!newName) return
+  copyProfileBusy.value = true
+  try {
+    await api.copyProfile(homeId.value, source, newName)
+    profiles.value = await api.listProfiles(homeId.value)
+    cancelCopyProfile()
+    Message.success(t('instanceEdit.profileCopied', { source, name: newName }))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    copyProfileBusy.value = false
+  }
+}
+
 function startRenameProfile(name: string) {
   renamingProfile.value = name
   renameValue.value = name
@@ -430,6 +464,18 @@ const rowSelection = {
                   </a-button>
                   <a-button size="small" @click="cancelRenameProfile">{{ t('instanceEdit.cancel') }}</a-button>
                 </template>
+                <template v-else-if="copyingProfile === p">
+                  <a-input
+                    v-model="copyProfileName"
+                    class="profile-item-name"
+                    :status="copyProfileName.trim() ? undefined : 'error'"
+                    @press-enter="confirmCopyProfile"
+                  />
+                  <a-button size="small" type="primary" :loading="copyProfileBusy" @click="confirmCopyProfile">
+                    {{ t('instanceEdit.profileCopySave') }}
+                  </a-button>
+                  <a-button size="small" @click="cancelCopyProfile">{{ t('instanceEdit.cancel') }}</a-button>
+                </template>
                 <template v-else>
                   <span class="profile-item-name">
                     {{ p }}
@@ -439,6 +485,7 @@ const rowSelection = {
                   </span>
                   <span class="profile-item-actions">
                     <a-button size="small" @click="startRenameProfile(p)">{{ t('instanceEdit.profileRename') }}</a-button>
+                    <a-button size="small" @click="startCopyProfile(p)">{{ t('instanceEdit.profileCopy') }}</a-button>
                     <a-button
                       v-if="defaultProfile !== p"
                       size="small"
