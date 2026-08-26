@@ -28,8 +28,8 @@ pub fn open_instance_window(
     let parsed = WebviewUrl::External(url.parse().map_err(|e| format!("无效的 URL {url}: {e}"))?);
     let win = WebviewWindowBuilder::new(app, label, parsed)
         .title(format!("{name} — DSH"))
-        .inner_size(1440.0, 900.0)
-        .min_inner_size(900.0, 600.0)
+        .inner_size(1024.0, 576.0)
+        .min_inner_size(800.0, 500.0)
         .center()
         .build()
         .map_err(|e| e.to_string())?;
