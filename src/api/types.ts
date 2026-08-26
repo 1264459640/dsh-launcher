@@ -170,3 +170,9 @@ export interface SetPluginsEnabledInput {
   pluginIds: string[]
   enabled: boolean
 }
+
+export interface UninstallPluginInput {
+  instanceId: string
+  profile: string
+  pluginId: string
+}

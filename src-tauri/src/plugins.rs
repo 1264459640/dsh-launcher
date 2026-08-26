@@ -593,6 +593,144 @@ pub async fn set_plugins_enabled(
     Ok(())
 }
 
+/// Input for uninstalling a plugin from a profile.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct UninstallPluginInput {
+    pub instance_id: String,
+    pub profile: String,
+    pub plugin_id: String,
+}
+
+/// Uninstalls a plugin from an instance's profile: removes it from the
+/// manifest (dependencies + bundles), drops its cordis.patch.yml rows
+/// (insert / disabled), and runs `pnpm remove` to delete the package.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn uninstall_plugin(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: UninstallPluginInput,
+) -> Result<(), String> {
+    let (home_path, _version) = resolve_instance(&state, &input.instance_id)?;
+    let dir = profile_dir(&home_path, &input.profile);
+    if !dir.exists() {
+        return Err(format!("Profile「{}」不存在", input.profile));
+    }
+
+    // 1. Remove from the manifest (dependencies + bundles).
+    let mut manifest = read_profile_manifest(&dir)?;
+    let mut changed = false;
+    if let Some(deps) = manifest.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+        if deps.remove(&input.plugin_id).is_some() {
+            changed = true;
+        }
+    }
+    if let Some(bundles) = manifest
+        .pointer_mut("/dsh/profile/bundles")
+        .and_then(|b| b.as_array_mut())
+    {
+        let before = bundles.len();
+        bundles.retain(|b| b.as_str() != Some(input.plugin_id.as_str()));
+        changed |= bundles.len() != before;
+    }
+    if changed {
+        write_profile_manifest(&dir, &manifest)?;
+    }
+
+    // 2. Drop the plugin's rows from cordis.patch.yml (insert rows mount the
+    //    plugin; disabled rows gate it). Reuse the block-stripping logic in
+    //    set_disabled_row by removing any block whose id matches.
+    let patch_path = dir.join("cordis.patch.yml");
+    if patch_path.exists() {
+        let raw = std::fs::read_to_string(&patch_path)
+            .map_err(|e| format!("读取 cordis.patch.yml 失败: {e}"))?;
+        let cordis_id = cordis_id_of(&input.plugin_id);
+        let cleaned = strip_cordis_rows(&raw, &cordis_id, &input.plugin_id);
+        if cleaned != raw {
+            std::fs::write(&patch_path, &cleaned)
+                .map_err(|e| format!("写入 cordis.patch.yml 失败: {e}"))?;
+        }
+    }
+
+    // 3. pnpm remove the package from the profile (reuses the shared store).
+    let store_dir = state.data_dir.join(".pnpm-store");
+    let pnpm_prog = ensure_pnpm_for_plugins(&app, &state, "uninstall").await?;
+    let mut cmd = tokio::process::Command::new(&pnpm_prog);
+    crate::process::hide_console(&mut cmd);
+    cmd.args(["remove", &input.plugin_id])
+        .arg("--prefix")
+        .arg(&dir)
+        .arg("--store-dir")
+        .arg(&store_dir)
+        .args(["--loglevel=warn"]);
+    if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
+        let registry = registry.trim().to_string();
+        if !registry.is_empty() {
+            cmd.args(["--registry", &registry]);
+        }
+    }
+    crate::tasks::run_streamed_command(&app, &state, "uninstall", cmd, "pnpm remove").await
+}
+
+/// Strips every cordis.patch.yml block whose id equals `cordis_id` (matching
+/// plain `- id:` / `id:` rows, including `- insert:` wrappers) and restores
+/// the `[]` placeholder when the document becomes empty.
+fn strip_cordis_rows(raw: &str, cordis_id: &str, plugin_id: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut skip = false;
+    for line in raw.lines() {
+        let t = line.trim();
+        if t == "[]" {
+            continue;
+        }
+        // Start of a block for the target: `- id: <id>` (plain or insert row).
+        let is_target = t == format!("- id: {cordis_id}")
+            || t == format!("id: {cordis_id}")
+            || t == format!("- id: {plugin_id}")
+            || t == format!("id: {plugin_id}");
+        if is_target {
+            skip = true;
+            continue;
+        }
+        if skip {
+            // Inside a target block: drop indented child lines and blank
+            // separators; stop at the next top-level key.
+            if t.is_empty() {
+                continue;
+            }
+            let indent = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+            if indent > 0 {
+                continue;
+            }
+            skip = false;
+        }
+        out.push(line.to_string());
+    }
+
+    let mut cleaned: Vec<String> = out;
+    while cleaned.last().map(|l| l.trim().is_empty()) == Some(true) {
+        cleaned.pop();
+    }
+    let mut result = cleaned.join("\n");
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    let body: String = result
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with('#')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if body.trim().is_empty() {
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str("[]\n");
+    }
+    result
+}
+
 /// Add or remove a `disabled: true` row for a cordis id in cordis.patch.yml.
 fn set_disabled_row(raw: &str, cordis_id: &str, enabled: bool) -> String {
     // Remove any existing rows for this id (both plain and commented forms).
@@ -1259,6 +1397,26 @@ mod tests {
         let on = set_disabled_row(&off, "dsh-auxiliary", true);
         assert!(on.contains("[]"), "placeholder restored: {on}");
         assert!(!on.contains("dsh-auxiliary"), "entry removed: {on}");
+    }
+
+    #[test]
+    fn strip_cordis_rows_removes_insert_and_disabled_blocks() {
+        // A plugin mounted via an insert row plus a disabled row for another
+        // plugin must leave the other plugin intact.
+        let raw = "# header\n- insert:\n    - id: dsh-auxiliary\n      name: '@dsh-plugin/dsh-auxiliary'\n\n- id: dsh-thought-buddy\n  disabled: true\n\n- id: keep\n  config:\n    x: 1\n";
+        let out = strip_cordis_rows(raw, "dsh-auxiliary", "@dsh-plugin/dsh-auxiliary");
+        assert!(!out.contains("dsh-auxiliary"), "insert row removed: {out}");
+        assert!(out.contains("dsh-thought-buddy"), "other block kept: {out}");
+        assert!(out.contains("keep"), "config block kept: {out}");
+        assert!(out.contains("x: 1"), "config content kept: {out}");
+    }
+
+    #[test]
+    fn strip_cordis_rows_restores_placeholder_when_empty() {
+        let raw = "# header\n- id: dsh-auxiliary\n  disabled: true\n";
+        let out = strip_cordis_rows(raw, "dsh-auxiliary", "@dsh-plugin/dsh-auxiliary");
+        assert!(out.contains("[]"), "placeholder restored: {out}");
+        assert!(!out.contains("dsh-auxiliary"), "entry removed: {out}");
     }
 
     #[test]

@@ -274,8 +274,24 @@ const visiblePlugins = computed(() =>
   installedPlugins.value.filter((p) => !p.id.startsWith('@deepseek-ai/')),
 )
 
+/**
+ * 版本号显示：Git commit 哈希（40 位十六进制）只显示前 7 位。
+ */
+function displayVersion(v: string | undefined): string {
+  if (v && /^[0-9a-f]{40}$/i.test(v)) return v.slice(0, 7)
+  return v ?? ''
+}
+
 watch([pluginProfile, homeId], async () => {
   await loadPlugins()
+})
+
+// 进入插件页时若未选择 Profile，默认选中实例的默认 Profile。
+watch(activeTab, async (tab) => {
+  if (tab !== 'plugins') return
+  if (!pluginProfile.value && defaultProfile.value && profiles.value.includes(defaultProfile.value)) {
+    pluginProfile.value = defaultProfile.value
+  }
 })
 
 async function loadPlugins() {
@@ -311,6 +327,24 @@ async function onTogglePlugin(p: InstalledPlugin, enabled: boolean) {
   } catch (e) {
     Message.error(String(e))
     await loadPlugins()
+  } finally {
+    pluginsBusy.value = false
+  }
+}
+
+async function onUninstallPlugin(p: InstalledPlugin) {
+  if (!editingId.value || !pluginProfile.value) return
+  pluginsBusy.value = true
+  try {
+    await api.uninstallPlugin({
+      instanceId: editingId.value,
+      profile: pluginProfile.value,
+      pluginId: p.id,
+    })
+    Message.success(t('instanceEdit.pluginUninstalled', { name: p.id }))
+    await loadPlugins()
+  } catch (e) {
+    Message.error(String(e))
   } finally {
     pluginsBusy.value = false
   }
@@ -579,7 +613,7 @@ const rowSelection = {
                     </a-table-column>
                     <a-table-column :title="t('instanceEdit.pluginVersion')" data-index="version" :width="140">
                       <template #cell="{ record }">
-                        <span v-if="record.version">{{ record.version }}</span>
+                        <span v-if="record.version">{{ displayVersion(record.version) }}</span>
                         <span v-else class="plugin-no-version">-</span>
                       </template>
                     </a-table-column>
@@ -592,6 +626,18 @@ const rowSelection = {
                           :unchecked-text="t('instanceEdit.pluginOff')"
                           @change="onSwitchChange(record, $event)"
                         />
+                      </template>
+                    </a-table-column>
+                    <a-table-column :title="t('instanceEdit.pluginActions')" :width="90">
+                      <template #cell="{ record }">
+                        <a-popconfirm
+                          :content="t('instanceEdit.pluginUninstallConfirm', { name: record.id })"
+                          @ok="onUninstallPlugin(record)"
+                        >
+                          <a-button size="small" status="danger" :disabled="pluginsBusy">
+                            {{ t('instances.table.delete') }}
+                          </a-button>
+                        </a-popconfirm>
                       </template>
                     </a-table-column>
                   </template>

@@ -103,6 +103,7 @@ pub fn run() {
             plugins::fetch_plugin_versions,
             plugins::list_installed_plugins,
             plugins::set_plugins_enabled,
+            plugins::uninstall_plugin,
             plugins::start_install_plugin_task,
         ])
         .build(tauri::generate_context!())

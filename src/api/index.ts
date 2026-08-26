@@ -21,6 +21,7 @@ import type {
   TaskInfo,
   TaskLog,
   TaskProgress,
+  UninstallPluginInput,
 } from './types'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -629,6 +630,8 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
     }
     case 'set_plugins_enabled':
       return undefined as T
+    case 'uninstall_plugin':
+      return undefined as T
     case 'start_install_plugin_task': {
       const input = args?.input as InstallPluginInput
       const id = mockNewId('t')
@@ -708,6 +711,7 @@ export const api = {
   listInstalledPlugins: (instanceId: string, profile: string) =>
     call<InstalledPlugin[]>('list_installed_plugins', { instance_id: instanceId, profile }),
   setPluginsEnabled: (input: SetPluginsEnabledInput) => call<void>('set_plugins_enabled', { input }),
+  uninstallPlugin: (input: UninstallPluginInput) => call<void>('uninstall_plugin', { input }),
   startInstallPluginTask: (input: InstallPluginInput) => call<string>('start_install_plugin_task', { input }),
 
   async onInstanceStatus(cb: Listener<InstanceStatus>): Promise<() => void> {
