@@ -125,6 +125,17 @@ function formatLabel(v: PluginVersionInfo): string {
   return v.label ?? v.version
 }
 
+/**
+ * 版本号显示：alpha（开发版）是 Git commit 哈希，只显示前 7 位；存储时
+ * 依然使用完整的哈希（v.version 原样写入 store.pluginWizard）。
+ */
+function displayVersion(v: PluginVersionInfo): string {
+  if (v.channel === 'alpha' && /^[0-9a-f]{40}$/i.test(v.version)) {
+    return v.version.slice(0, 7)
+  }
+  return v.version
+}
+
 const hasAny = computed(() =>
   channels.some((ch) => versionsByChannel.value[ch].length > 0),
 )
@@ -183,7 +194,7 @@ const hasAny = computed(() =>
             >{{ channelMeta[ch].letter }}</span>
             <div class="version-meta">
               <div class="version-name">
-                {{ v.version }}
+                {{ displayVersion(v) }}
                 <a-tag v-if="v.is_default" size="small" color="green">
                   {{ t('plugins.defaultTag') }}
                 </a-tag>

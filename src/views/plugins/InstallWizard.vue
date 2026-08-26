@@ -23,6 +23,17 @@ const profilesLoading = ref(false)
 const instances = computed(() => store.instances)
 const selectedInstance = computed(() => store.instanceById(instanceId.value))
 
+/**
+ * 版本号显示：alpha（开发版）是 Git commit 哈希，只显示前 7 位；提交安装
+ * 时仍使用完整的哈希（state.version.version 原样传给后端）。
+ */
+function displayVersion(version: string): string {
+  if (state.value?.channel === 'alpha' && /^[0-9a-f]{40}$/i.test(version)) {
+    return version.slice(0, 7)
+  }
+  return version
+}
+
 watch(instanceId, async (id) => {
   profile.value = ''
   profiles.value = []
@@ -89,7 +100,7 @@ async function startInstall() {
     <a-page-header
       class="wizard-header"
       :title="t('plugins.installTitle')"
-      :sub-title="state ? `${state.plugin.name} ${state.version?.version ?? ''}` : ''"
+      :sub-title="state ? `${state.plugin.name} ${displayVersion(state.version?.version ?? '')}` : ''"
       @back="router.back()"
     />
 
@@ -104,11 +115,10 @@ async function startInstall() {
         <div class="summary-row">
           <span class="summary-label">{{ t('plugins.chooseVersion') }}</span>
           <span v-if="state.version" class="summary-value">
-            <span
-              class="channel-letter"
+            <span class="channel-letter"
               :style="{ background: state.channel === 'stable' ? 'green' : state.channel === 'beta' ? 'orange' : 'red' }"
             >{{ state.channel === 'stable' ? 'R' : state.channel === 'beta' ? 'B' : 'A' }}</span>
-            {{ state.version.version }}
+            {{ displayVersion(state.version.version) }}
           </span>
         </div>
       </div>
