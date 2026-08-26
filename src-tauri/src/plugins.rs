@@ -600,6 +600,11 @@ fn set_disabled_row(raw: &str, cordis_id: &str, enabled: bool) -> String {
     let mut skip_block = false;
     for line in raw.lines() {
         let t = line.trim();
+        // A top-level `[]` placeholder is dropped when we have any real entry
+        // to write; it is kept only while the document stays empty.
+        if t == "[]" {
+            continue;
+        }
         let is_target_id = t == format!("- id: {cordis_id}") || t == format!("id: {cordis_id}");
         if is_target_id {
             // Start of a block for this id; look ahead: if it is a pure
@@ -628,7 +633,7 @@ fn set_disabled_row(raw: &str, cordis_id: &str, enabled: bool) -> String {
     }
 
     if !enabled {
-        // Append a fresh disable row.
+        // Append a fresh disable row (block sequence, never after `[]`).
         cleaned.push(String::new());
         cleaned.push(format!("- id: {cordis_id}"));
         cleaned.push("  disabled: true".to_string());
@@ -637,6 +642,22 @@ fn set_disabled_row(raw: &str, cordis_id: &str, enabled: bool) -> String {
     let mut result = cleaned.join("\n");
     if !result.ends_with('\n') {
         result.push('\n');
+    }
+    // If the document became empty again (everything removed), restore the
+    // `[]` placeholder so the file stays a valid top-level array.
+    let body: String = result
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with('#')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if body.trim().is_empty() {
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str("[]\n");
     }
     result
 }
@@ -895,6 +916,11 @@ fn register_bundle_in_manifest(
 
 /// Ensure cordis.patch.yml has an insert row for the plugin (non-bundle
 /// plugins need an explicit mount row).
+///
+/// The file is a top-level YAML array. A fresh profile ships as comments +
+/// a `[]` empty-array placeholder — we must replace that placeholder with a
+/// block sequence (`- insert: ...`) instead of appending to it (appending
+/// would produce two YAML documents and fail to parse).
 fn ensure_cordis_insert(dir: &std::path::Path, plugin_id: &str) -> Result<(), String> {
     let cordis_id = cordis_id_of(plugin_id);
     let path = dir.join("cordis.patch.yml");
@@ -907,13 +933,41 @@ fn ensure_cordis_insert(dir: &std::path::Path, plugin_id: &str) -> Result<(), St
     if raw.contains(&format!("id: {cordis_id}")) {
         return Ok(());
     }
-    let mut out = raw.trim_end().to_string();
-    if !out.is_empty() {
-        out.push('\n');
-    }
-    out.push_str(&format!(
-        "- insert:\n    - id: {cordis_id}\n      name: '{plugin_id}'\n"
-    ));
+
+    let entry = format!("- insert:\n    - id: {cordis_id}\n      name: '{plugin_id}'\n");
+
+    // Strip comment lines and blank lines to find the actual document body.
+    let body: String = raw
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with('#')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body_trimmed = body.trim();
+
+    let out = if body_trimmed.is_empty() || body_trimmed == "[]" {
+        // Empty document / empty-array placeholder: keep the comment header
+        // and replace the `[]` with the new entry.
+        let header: String = raw
+            .lines()
+            .take_while(|l| {
+                let t = l.trim();
+                t.is_empty() || t.starts_with('#')
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if header.trim().is_empty() {
+            entry
+        } else {
+            format!("{}\n{}", header.trim_end(), entry)
+        }
+    } else {
+        // Real entries exist: append a block entry.
+        format!("{}\n{}", raw.trim_end(), entry)
+    };
+
     std::fs::write(&path, out).map_err(|e| format!("写入 cordis.patch.yml 失败: {e}"))?;
     Ok(())
 }
@@ -1005,6 +1059,55 @@ mod tests {
         assert_eq!(raw.matches("- insert:").count(), 1, "raw: {raw}");
         assert!(raw.contains("id: dsh-auxiliary"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ensure_cordis_insert_replaces_empty_array_placeholder() {
+        // The real-world bug: a fresh profile ships comments + `[]` and the
+        // first insert row must REPLACE `[]`, not append after it (two YAML
+        // documents would otherwise fail to parse).
+        let dir = std::env::temp_dir().join(format!("dsh-plugins-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cordis.patch.yml"),
+            "# cordis.patch.yml\n# a top-level YAML array of load-order\n# overrides\n[]\n",
+        )
+        .unwrap();
+        ensure_cordis_insert(&dir, "@dsh-plugin/dsh-auxiliary").unwrap();
+        let raw = std::fs::read_to_string(dir.join("cordis.patch.yml")).unwrap();
+        assert!(raw.contains("# cordis.patch.yml"), "header kept: {raw}");
+        assert!(!raw.contains("[]"), "placeholder replaced: {raw}");
+        assert!(raw.contains("- insert:"), "raw: {raw}");
+        assert!(raw.contains("id: dsh-auxiliary"), "raw: {raw}");
+        // The body must be a single valid block sequence.
+        let body: String = raw
+            .lines()
+            .filter(|l| !l.trim().starts_with('#') && !l.trim().is_empty())
+            .collect();
+        assert!(body.starts_with("- insert:"), "single sequence: {body}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn set_disabled_row_replaces_empty_array_placeholder() {
+        let raw = "# header\n# comment\n[]\n";
+        let out = set_disabled_row(raw, "dsh-auxiliary", false);
+        assert!(out.contains("# header"), "header kept: {out}");
+        assert!(!out.contains("[]"), "placeholder dropped: {out}");
+        assert!(out.contains("- id: dsh-auxiliary"), "out: {out}");
+        assert!(out.contains("  disabled: true"), "out: {out}");
+    }
+
+    #[test]
+    fn set_disabled_row_empty_again_restores_placeholder() {
+        // Disabling then re-enabling the only entry should leave a valid
+        // document again (comment header + `[]`), not an empty file.
+        let raw = "# header\n[]\n";
+        let off = set_disabled_row(raw, "dsh-auxiliary", false);
+        assert!(!off.contains("[]"));
+        let on = set_disabled_row(&off, "dsh-auxiliary", true);
+        assert!(on.contains("[]"), "placeholder restored: {on}");
+        assert!(!on.contains("dsh-auxiliary"), "entry removed: {on}");
     }
 
     #[test]
