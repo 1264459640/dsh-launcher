@@ -40,6 +40,14 @@
     "emptyDesc": "Create an instance to get started: pick a DSH version, a DSH_HOME and a profile.",
     "deleted": "Instance deleted",
     "confirmDelete": "Delete instance \"{name}\"?",
+    "copied": "Instance \"{name}\" copied",
+    "copyTitle": "Copy instance",
+    "copyNameLabel": "New instance name",
+    "copyNamePlaceholder": "Enter the copy name",
+    "copyHomeLabel": "DSH_HOME",
+    "copyHomeReuse": "Reuse the source DSH_HOME",
+    "copyHomeNew": "Create a dedicated DSH_HOME",
+    "copyHint": "The instance is actually duplicated after you name it and save; the copy uses the same DSH version as the source.",
     "table": {
       "name": "Name",
       "version": "Version",
@@ -48,6 +56,7 @@
       "status": "Status",
       "actions": "Actions",
       "edit": "Settings",
+      "copy": "Copy",
       "delete": "Delete"
     }
   },

@@ -3,6 +3,7 @@
 // browser so the UI can be previewed without the Rust side.
 
 import type {
+  CopyInstanceInput,
   DshHome,
   DshInstance,
   DshVersion,
@@ -354,6 +355,38 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       saveDb(db)
       return undefined as T
     }
+    case 'copy_instance': {
+      const input = args?.input as CopyInstanceInput
+      const source = db.instances.find((i) => i.id === input.source_id)
+      if (!source) fail('源实例不存在')
+      if (db.instances.some((i) => i.name === input.name)) fail('同名实例已存在')
+      let homeId = source.home_id
+      if (input.new_home) {
+        const path = `C:\\Users\\Administrator\\AppData\\Roaming\\in.dsh-plug.dsh-launcher\\homes\\${input.name.replace(/[^\w一-龥.-]+/g, '_')}`
+        const existing = db.homes.find(
+          (h) => h.path.replace(/\\/g, '/').toLowerCase() === path.replace(/\\/g, '/').toLowerCase(),
+        )
+        if (existing) {
+          homeId = existing.id
+        } else {
+          const home: DshHome = { id: `h-${uuid()}`, name: input.name, path }
+          db.homes.push(home)
+          homeId = home.id
+        }
+      }
+      const inst: DshInstance = {
+        id: `i-${uuid()}`,
+        name: input.name,
+        version_id: source.version_id,
+        home_id: homeId,
+        env_overrides: { ...source.env_overrides },
+        default_profile: source.default_profile,
+        last_profile: null,
+      }
+      db.instances.push(inst)
+      saveDb(db)
+      return inst as T
+    }
     case 'list_profiles': {
       const homeId = String(args?.home_id)
       const home = db.homes.find((h) => h.id === homeId)
@@ -630,6 +663,7 @@ export const api = {
   createInstance: (input: NewInstanceInput) => call<DshInstance>('create_instance', { input }),
   updateInstance: (input: DshInstance) => call<DshInstance>('update_instance', { input }),
   deleteInstance: (id: string) => call<void>('delete_instance', { id }),
+  copyInstance: (input: CopyInstanceInput) => call<DshInstance>('copy_instance', { input }),
 
   listProfiles: (homeId: string) => call<string[]>('list_profiles', { home_id: homeId }),
   createProfile: (homeId: string, name: string) =>

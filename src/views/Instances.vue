@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
-import type { InstanceState } from '@/api/types'
+import type { DshInstance, InstanceState } from '@/api/types'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -17,7 +17,7 @@ const columns = computed(() => [
   { title: t('instances.table.home'), slotName: 'home', width: 180 },
   { title: t('instances.table.profile'), slotName: 'profile', width: 120 },
   { title: t('instances.table.status'), slotName: 'status' },
-  { title: t('instances.table.actions'), slotName: 'actions', width: 150, align: 'center' as const },
+  { title: t('instances.table.actions'), slotName: 'actions', width: 200, align: 'center' as const },
 ])
 
 function stateColor(state: InstanceState): string {
@@ -40,6 +40,46 @@ async function onDelete(id: string, name: string) {
     Message.success(t('instances.deleted'))
   } catch (e) {
     Message.error(String(e))
+  }
+}
+
+// --- Copy instance ---------------------------------------------------------
+
+const copySource = ref<DshInstance | null>(null)
+const copyName = ref('')
+const copyNewHome = ref(false)
+const copying = ref(false)
+
+function openCopy(inst: DshInstance) {
+  copySource.value = inst
+  copyName.value = `${inst.name} 副本`
+  copyNewHome.value = false
+}
+
+function closeCopy() {
+  copySource.value = null
+  copyName.value = ''
+  copyNewHome.value = false
+}
+
+const copyValid = computed(() => copyName.value.trim().length > 0 && !!copySource.value)
+
+async function confirmCopy() {
+  if (!copySource.value || !copyValid.value) return
+  copying.value = true
+  try {
+    const created = await api.copyInstance({
+      source_id: copySource.value.id,
+      name: copyName.value.trim(),
+      new_home: copyNewHome.value,
+    })
+    await store.refreshInstances()
+    Message.success(t('instances.copied', { name: created.name }))
+    closeCopy()
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    copying.value = false
   }
 }
 
@@ -102,6 +142,9 @@ async function onOpenWindow(id: string) {
             >
               {{ t('instances.table.edit') }}
             </a-button>
+            <a-button size="small" @click="openCopy(record)">
+              {{ t('instances.table.copy') }}
+            </a-button>
             <a-popconfirm
               :content="t('instances.confirmDelete', { name: record.name })"
               @ok="onDelete(record.id, record.name)"
@@ -122,6 +165,30 @@ async function onOpenWindow(id: string) {
         </template>
       </a-table>
     </div>
+
+    <!-- Copy instance dialog: name it first, then duplicate on save -->
+    <a-modal
+      :visible="!!copySource"
+      :title="t('instances.copyTitle')"
+      :ok-text="t('instanceEdit.save')"
+      :cancel-text="t('instanceEdit.cancel')"
+      :ok-button-props="{ disabled: !copyValid, loading: copying }"
+      @ok="confirmCopy"
+      @cancel="closeCopy"
+    >
+      <a-form layout="vertical" :model="{}">
+        <a-form-item :label="t('instances.copyNameLabel')" required>
+          <a-input v-model="copyName" :placeholder="t('instances.copyNamePlaceholder')" />
+        </a-form-item>
+        <a-form-item :label="t('instances.copyHomeLabel')">
+          <a-radio-group v-model="copyNewHome" type="button">
+            <a-radio :value="false">{{ t('instances.copyHomeReuse') }}</a-radio>
+            <a-radio :value="true">{{ t('instances.copyHomeNew') }}</a-radio>
+          </a-radio-group>
+        </a-form-item>
+        <p class="copy-hint">{{ t('instances.copyHint') }}</p>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -135,5 +202,11 @@ async function onOpenWindow(id: string) {
   font-size: 15px;
   font-weight: 600;
   color: var(--color-text-1);
+}
+
+.copy-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-3);
 }
 </style>

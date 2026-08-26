@@ -97,6 +97,13 @@ export interface NewInstanceInput {
   default_profile: string | null
 }
 
+/** Input for duplicating an instance (new name + reuse/new DSH_HOME choice). */
+export interface CopyInstanceInput {
+  source_id: string
+  name: string
+  new_home: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Plugin marketplace
 // ---------------------------------------------------------------------------

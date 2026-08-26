@@ -260,6 +260,90 @@ pub async fn delete_instance(
     save_state(&state, &cfg)
 }
 
+/// Input for duplicating an instance.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct CopyInstanceInput {
+    /// The source instance id (the "母本").
+    pub source_id: String,
+    /// Name for the copied instance.
+    pub name: String,
+    /// When true, create a fresh dedicated DSH_HOME for the copy instead of
+    /// reusing the source instance's DSH_HOME.
+    pub new_home: bool,
+}
+
+/// Copies an instance: creates a new instance record with a new id/name. The
+/// copy either reuses the source instance's DSH_HOME (sharing sessions and
+/// profiles) or gets a brand-new dedicated DSH_HOME. The DSH version is
+/// always reused (the same binary can serve many instances).
+#[tauri::command(rename_all = "snake_case")]
+pub fn copy_instance(
+    state: State<'_, AppState>,
+    input: CopyInstanceInput,
+) -> Result<DshInstance, String> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err("实例名称不能为空".to_string());
+    }
+
+    let mut cfg = state.config.lock().unwrap();
+    if cfg.instances.iter().any(|i| i.name == name) {
+        return Err("同名实例已存在".to_string());
+    }
+    let source = cfg
+        .instances
+        .iter()
+        .find(|i| i.id == input.source_id)
+        .cloned()
+        .ok_or_else(|| "源实例不存在".to_string())?;
+    if !cfg.versions.iter().any(|v| v.id == source.version_id) {
+        return Err("DSH 版本不存在".to_string());
+    }
+
+    // Resolve the DSH_HOME: reuse the source's, or create a dedicated one.
+    let home_id = if input.new_home {
+        let path = state
+            .data_dir
+            .join("homes")
+            .join(sanitize_name(&name))
+            .to_string_lossy()
+            .to_string();
+        let path_buf = std::path::PathBuf::from(&path);
+        // Reuse an existing HOME with the same path (path-based reuse).
+        if let Some(existing) = cfg
+            .homes
+            .iter()
+            .find(|h| crate::config::paths_equal(&h.path, &path_buf))
+        {
+            existing.id.clone()
+        } else {
+            std::fs::create_dir_all(&path_buf).map_err(|e| format!("创建目录失败: {e}"))?;
+            let home = DshHome {
+                id: new_id("h"),
+                name: name.clone(),
+                path: path_buf,
+            };
+            cfg.homes.push(home.clone());
+            home.id
+        }
+    } else {
+        source.home_id.clone()
+    };
+
+    let inst = DshInstance {
+        id: new_id("i"),
+        name,
+        version_id: source.version_id,
+        home_id,
+        env_overrides: source.env_overrides.clone(),
+        default_profile: source.default_profile.clone(),
+        last_profile: None,
+    };
+    cfg.instances.push(inst.clone());
+    save_state(&state, &cfg)?;
+    Ok(inst)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn list_profiles(state: State<'_, AppState>, home_id: String) -> Result<Vec<String>, String> {
     let cfg = state.config.lock().unwrap();

@@ -40,6 +40,14 @@
     "emptyDesc": "创建一个实例开始：选择 DSH 版本、DSH_HOME 与 Profile。",
     "deleted": "实例已删除",
     "confirmDelete": "确定删除实例「{name}」？",
+    "copied": "已复制实例「{name}」",
+    "copyTitle": "复制实例",
+    "copyNameLabel": "新实例名称",
+    "copyNamePlaceholder": "输入副本名称",
+    "copyHomeLabel": "DSH_HOME",
+    "copyHomeReuse": "复用母本的 DSH_HOME",
+    "copyHomeNew": "新建专属 DSH_HOME",
+    "copyHint": "设置名称并保存后才会实际复制实例；复制的实例使用与母本相同的 DSH 版本。",
     "table": {
       "name": "名称",
       "version": "版本",
@@ -48,6 +56,7 @@
       "status": "状态",
       "actions": "操作",
       "edit": "设置",
+      "copy": "复制",
       "delete": "删除"
     }
   },
