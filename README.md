@@ -12,6 +12,10 @@ English | [简体中文](README.zh_CN.md)
 
 Tauri 2 + Vue 3 + TypeScript + Sass + vue-router + vue-i18n + Arco Design Vue.
 
+## Preview
+
+![Preview](docs/img.png)
+
 ## Features
 
 - **Multi-version installs**: query the npm registry and install multiple `@deepseek-ai/dsh` versions into isolated directories that never interfere with each other.

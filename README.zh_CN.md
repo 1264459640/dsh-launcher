@@ -12,6 +12,10 @@
 
 Tauri 2 + Vue 3 + TypeScript + Sass + vue-router + vue-i18n + Arco Design Vue。
 
+## 预览
+
+![预览](docs/img.png)
+
 ## 功能
 
 - **多版本安装**：从 npm registry 查询并安装多个 `@deepseek-ai/dsh` 版本到隔离目录，互不干扰。
