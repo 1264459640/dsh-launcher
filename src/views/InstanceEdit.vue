@@ -286,11 +286,16 @@ watch([pluginProfile, homeId], async () => {
   await loadPlugins()
 })
 
-// 进入插件页时若未选择 Profile，默认选中实例的默认 Profile。
+// 进入插件页时若未选择 Profile：优先选中实例的默认 Profile；若实例没有
+// 设置默认 Profile，则选中找到的第一个 Profile。
 watch(activeTab, async (tab) => {
   if (tab !== 'plugins') return
-  if (!pluginProfile.value && defaultProfile.value && profiles.value.includes(defaultProfile.value)) {
+  if (pluginProfile.value) return
+  if (profiles.value.length === 0) return
+  if (defaultProfile.value && profiles.value.includes(defaultProfile.value)) {
     pluginProfile.value = defaultProfile.value
+  } else {
+    pluginProfile.value = profiles.value[0]
   }
 })
 
