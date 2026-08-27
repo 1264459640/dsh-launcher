@@ -564,7 +564,13 @@ async fn install_version_streamed(
         match run_streamed_command(app, state, task_id, cmd, "pnpm install").await {
             Ok(()) => break,
             Err(_e) if attempt == 1 && task_log_mentions_ignored_builds(state, task_id) => {
-                push_task_log(app, state, task_id, "pnpm 11 拦截了构建脚本，正在批准 allowBuilds 后重试…").await;
+                push_task_log(
+                    app,
+                    state,
+                    task_id,
+                    "pnpm 11 拦截了构建脚本，正在批准 allowBuilds 后重试…",
+                )
+                .await;
                 crate::plugins::ensure_build_scripts_allowed(&dir)?;
             }
             Err(e) => return Err(e),

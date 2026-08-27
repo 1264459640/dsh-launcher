@@ -619,7 +619,10 @@ pub async fn uninstall_plugin(
     // 1. Remove from the manifest (dependencies + bundles).
     let mut manifest = read_profile_manifest(&dir)?;
     let mut changed = false;
-    if let Some(deps) = manifest.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+    if let Some(deps) = manifest
+        .get_mut("dependencies")
+        .and_then(|d| d.as_object_mut())
+    {
         if deps.remove(&input.plugin_id).is_some() {
             changed = true;
         }
@@ -1083,7 +1086,8 @@ fn task_log_mentions_ignored_builds(state: &State<'_, AppState>, task_id: &str) 
 pub(crate) fn ensure_build_scripts_allowed(dir: &std::path::Path) -> Result<(), String> {
     let ws_manifest = dir.join("pnpm-workspace.yaml");
     let raw = if ws_manifest.exists() {
-        std::fs::read_to_string(&ws_manifest).map_err(|e| format!("读取 pnpm-workspace.yaml 失败: {e}"))?
+        std::fs::read_to_string(&ws_manifest)
+            .map_err(|e| format!("读取 pnpm-workspace.yaml 失败: {e}"))?
     } else {
         String::new()
     };
@@ -1118,7 +1122,10 @@ pub(crate) fn ensure_build_scripts_allowed(dir: &std::path::Path) -> Result<(), 
 
     // 3. Ensure an `allowBuilds:` section exists so pnpm 11 has somewhere to
     //    record newly-ignored builds (it auto-appends entries on failure).
-    if !lines.iter().any(|l| l.trim_start().starts_with("allowBuilds:")) {
+    if !lines
+        .iter()
+        .any(|l| l.trim_start().starts_with("allowBuilds:"))
+    {
         lines.push(String::new());
         lines.push("allowBuilds:".to_string());
         changed = true;
@@ -1527,7 +1534,10 @@ mod tests {
         ensure_build_scripts_allowed(&dir).unwrap();
         let fixed = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
         assert!(fixed.contains("node-pty: true"), "fixed: {fixed}");
-        assert!(!fixed.contains("set this to true or false"), "fixed: {fixed}");
+        assert!(
+            !fixed.contains("set this to true or false"),
+            "fixed: {fixed}"
+        );
         // Legacy section added without clobbering existing content.
         assert!(fixed.contains("onlyBuiltDependencies"), "fixed: {fixed}");
 
