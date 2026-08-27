@@ -1,22 +1,23 @@
 //! Launcher self-update check against GitHub releases.
 //!
-//! Uses the `releases.atom` feed rather than the REST API: the feed is
-//! served from the main github.com domain and is not subject to the
-//! unauthenticated API rate limit (60 req/h per IP, whose exhaustion
-//! surfaces as HTTP 403). Draft releases never appear in the feed, and the
-//! prerelease flag is derived from the tag's semver pre-release segment, so
-//! nothing from the API payload is actually needed.
+//! Uses the GitHub REST API (`/repos/{repo}/releases`) with the anonymous
+//! OAuth client id boost (see `plugins::GITHUB_CLIENT_ID`): plain
+//! unauthenticated API calls are limited to 60 req/h per IP, and the
+//! `releases.atom` feed served from the main github.com domain is not the API
+//! at all — under heavy IP load it can be refused at the transport layer
+//! (`error sending request for url ...`). Passing the public client id raises
+//! the unauth quota to 5000 req/h, exactly as the plugin marketplace does.
 //!
 //! Channel follows the running build: a `-dev.<run>` build looks at every
 //! published release (including prereleases, and a shipped stable outranks a
 //! dev build), while a stable build only considers releases without a semver
 //! pre-release segment.
 
-use regex::Regex;
+use serde::Deserialize;
 use serde::Serialize;
-use std::sync::OnceLock;
 
-const RELEASES_FEED: &str = "https://github.com/dsh-plugins/dsh-launcher/releases.atom";
+const RELEASES_API: &str =
+    "/repos/dsh-plugins/dsh-launcher/releases?per_page=100";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
@@ -42,38 +43,29 @@ fn parse_tag(tag: &str) -> Option<semver::Version> {
     semver::Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()
 }
 
-fn entry_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?s)<entry>(.*?)</entry>").unwrap())
+/// Minimal shape of a GitHub REST `/releases` list item.
+#[derive(Clone, Debug, Deserialize)]
+struct ApiRelease {
+    tag_name: String,
+    html_url: String,
+    published_at: Option<String>,
 }
 
-fn link_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"<link[^>]*href="([^"]*/releases/tag/([^"]+))""#).unwrap())
-}
-
-fn updated_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"<updated>([^<]+)</updated>").unwrap())
-}
-
-/// Extracts release entries from a GitHub releases.atom feed. The tag comes
-/// from the entry's `/releases/tag/<tag>` link (not the title, which is a
-/// free-form release name). HTML inside <content> is entity-escaped, so raw
-/// tag matching is safe.
-fn parse_atom_feed(feed: &str) -> Vec<ReleaseEntry> {
-    entry_re()
-        .captures_iter(feed)
-        .filter_map(|entry| {
-            let body = entry.get(1)?.as_str();
-            let link = link_re().captures(body)?;
-            Some(ReleaseEntry {
-                html_url: link[1].to_string(),
-                tag_name: link[2].to_string(),
-                published_at: updated_re().captures(body).map(|c| c[1].to_string()),
-            })
+/// Normalises API items into `ReleaseEntry`es, newest first (the API returns
+/// releases in reverse-chronological order, but order must not be relied on).
+fn parse_releases_json(body: &[u8]) -> Result<Vec<ReleaseEntry>, String> {
+    let api: Vec<ApiRelease> = serde_json::from_slice(body)
+        .map_err(|e| format!("解析 GitHub Releases JSON 失败: {e}"))?;
+    let mut out: Vec<ReleaseEntry> = api
+        .into_iter()
+        .map(|r| ReleaseEntry {
+            tag_name: r.tag_name,
+            html_url: r.html_url,
+            published_at: r.published_at,
         })
-        .collect()
+        .collect();
+    out.sort_by(|a, b| b.tag_name.cmp(&a.tag_name));
+    Ok(out)
 }
 
 /// Picks the newest published release strictly newer than `current`.
@@ -99,14 +91,15 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
         .map_err(|e| format!("当前版本号无效 {current_raw}: {e}"))?;
     let dev_channel = current_raw.contains("-dev.");
 
+    let url = crate::plugins::github_api_url(RELEASES_API);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent("dsh-launcher")
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
-    crate::log_debug!("检查启动器更新：{RELEASES_FEED}");
+    crate::log_debug!("检查启动器更新：{url}");
     let resp = client
-        .get(RELEASES_FEED)
+        .get(&url)
         .send()
         .await
         .map_err(|e| format!("请求 GitHub Releases 失败: {e}"))?;
@@ -120,9 +113,8 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
     if bytes.len() > MAX_BYTES {
         return Err("GitHub Releases 响应过大".to_string());
     }
-    let feed = String::from_utf8(bytes.to_vec()).map_err(|e| format!("响应编码无效: {e}"))?;
-    let releases = parse_atom_feed(&feed);
-    crate::log_debug!("releases.atom 解析出 {} 条发布记录", releases.len());
+    let releases = parse_releases_json(&bytes)?;
+    crate::log_debug!("GitHub Releases API 解析出 {} 条发布记录", releases.len());
 
     let latest = pick_latest(&current, dev_channel, &releases);
     match latest {
@@ -160,29 +152,20 @@ mod tests {
     }
 
     #[test]
-    fn atom_feed_extracts_tag_link_and_date() {
-        let feed = r#"<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en-US">
-  <id>tag:github.com,2008:https://github.com/dsh-plugins/dsh-launcher/releases</id>
-  <link type="text/html" rel="alternate" href="https://github.com/dsh-plugins/dsh-launcher/releases"/>
-  <title>Release notes from dsh-launcher</title>
-  <updated>2026-08-27T03:54:57Z</updated>
-  <entry>
-    <id>tag:github.com,2008:Repository/111/v0.2.0-dev.41</id>
-    <updated>2026-08-27T03:54:57Z</updated>
-    <link rel="alternate" type="text/html" href="https://github.com/dsh-plugins/dsh-launcher/releases/tag/v0.2.0-dev.41"/>
-    <title>v0.2.0-dev.41</title>
-    <content type="html">&lt;p&gt;notes with a literal &lt;link&gt; inside&lt;/p&gt;</content>
-  </entry>
-  <entry>
-    <id>tag:github.com,2008:Repository/111/v0.2.0-dev.40</id>
-    <updated>2026-08-27T03:42:00Z</updated>
-    <link rel="alternate" type="text/html" href="https://github.com/dsh-plugins/dsh-launcher/releases/tag/v0.2.0-dev.40"/>
-    <title>v0.2.0-dev.40</title>
-    <content type="html">&lt;p&gt;older&lt;/p&gt;</content>
-  </entry>
-</feed>"#;
-        let entries = parse_atom_feed(feed);
+    fn json_feed_extracts_tag_link_and_date() {
+        let body = br#"[
+          {
+            "tag_name": "v0.2.0-dev.41",
+            "html_url": "https://github.com/dsh-plugins/dsh-launcher/releases/tag/v0.2.0-dev.41",
+            "published_at": "2026-08-27T03:54:57Z"
+          },
+          {
+            "tag_name": "v0.2.0-dev.40",
+            "html_url": "https://github.com/dsh-plugins/dsh-launcher/releases/tag/v0.2.0-dev.40",
+            "published_at": null
+          }
+        ]"#;
+        let entries = parse_releases_json(body).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].tag_name, "v0.2.0-dev.41");
         assert_eq!(
@@ -193,7 +176,12 @@ mod tests {
             entries[0].published_at.as_deref(),
             Some("2026-08-27T03:54:57Z")
         );
-        assert_eq!(entries[1].tag_name, "v0.2.0-dev.40");
+        assert_eq!(entries[1].published_at, None);
+    }
+
+    #[test]
+    fn json_feed_rejects_malformed_body() {
+        assert!(parse_releases_json(b"not json").is_err());
     }
 
     #[test]

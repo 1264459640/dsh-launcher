@@ -17,7 +17,9 @@ const NPM_REGISTRY: &str = "https://registry.npmjs.org";
 const GITHUB_CLIENT_ID: &str = "Ov23li6vtlVd83282YL6";
 
 /// Build a GitHub API URL with the anonymous client-id quota boost.
-fn github_api_url(path: &str) -> String {
+/// `pub(crate)` so `update.rs` (launcher self-update check) can reuse the
+/// same quota-boosted endpoint instead of the rate-limited `releases.atom`.
+pub(crate) fn github_api_url(path: &str) -> String {
     let sep = if path.contains('?') { '&' } else { '?' };
     format!("https://api.github.com{path}{sep}client_id={GITHUB_CLIENT_ID}")
 }
