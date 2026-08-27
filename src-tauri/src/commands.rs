@@ -679,8 +679,19 @@ pub fn update_settings(
             _ => return Err(format!("无效的主题: {v}")),
         }
     }
+    if let Some(v) = settings.log_level {
+        match crate::applog::parse_level(&v) {
+            Some(level) => {
+                cfg.settings.log_level = v.trim().to_ascii_lowercase();
+                crate::applog::set_level(level);
+                crate::log_info!("日志等级已切换为 {}", level.as_str());
+            }
+            None => return Err(format!("无效的日志等级: {v}")),
+        }
+    }
     let out = cfg.settings.clone();
     save_state(&state, &cfg)?;
+    crate::log_debug!("设置已更新并保存");
     Ok(out)
 }
 

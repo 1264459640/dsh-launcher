@@ -1,3 +1,4 @@
+mod applog;
 mod commands;
 mod config;
 mod plugins;
@@ -34,6 +35,20 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             let config_path = data_dir.join("config.json");
             let cfg = config::load_config(&config_path);
+
+            // Runtime log: rotate the previous latest.log, then apply the
+            // configured level (invalid stored values fall back to info).
+            let log_level =
+                applog::parse_level(&cfg.settings.log_level).unwrap_or(applog::Level::Info);
+            if let Err(e) = applog::init(&data_dir.join("logs"), log_level) {
+                eprintln!("dsh-launcher: 初始化运行日志失败: {e}");
+            }
+            crate::log_info!(
+                "启动器已启动，版本 {}，数据目录 {}",
+                env!("CARGO_PKG_VERSION"),
+                data_dir.display()
+            );
+
             app.manage(AppState {
                 config_path,
                 data_dir: data_dir.clone(),

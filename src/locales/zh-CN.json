@@ -140,6 +140,14 @@
     },
     "minimizeToTray": "关闭主窗口时最小化到系统托盘",
     "autostart": "开机自动启动启动器",
+    "logLevel": {
+      "label": "日志等级",
+      "debug": "调试 (debug)",
+      "info": "信息 (info)",
+      "warn": "警告 (warn)",
+      "error": "错误 (error)",
+      "hint": "运行日志写入数据目录 logs/latest.log，每次启动自动轮转上一份日志。"
+    },
     "newsSource": "新闻来源",
     "newsSourcePlaceholder": "https://…/news.md 或本地 .md/.html 文件路径",
     "newsSourceHint": "支持 Markdown（GFM + 内联 HTML）与 HTML 文件；内容会先经 XSS 过滤再展示在启动页右侧新闻区域，链接在新窗口打开。",

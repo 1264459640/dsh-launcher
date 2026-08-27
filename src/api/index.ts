@@ -77,6 +77,7 @@ function seedDb(): MockDb {
       last_instance_id: 'i-main',
       news_source: 'https://gist.githubusercontent.com/Gu-ZT/f08daa33afb82f4b375e604039b92742/raw/DSH_NEWS.md',
       theme: 'system',
+      log_level: 'info',
     },
     running: {},
   }
@@ -85,7 +86,12 @@ function seedDb(): MockDb {
 function loadDb(): MockDb {
   try {
     const raw = localStorage.getItem(MOCK_KEY)
-    if (raw) return JSON.parse(raw) as MockDb
+    if (raw) {
+      const db = JSON.parse(raw) as MockDb
+      // Backfill fields added after the mock db was persisted.
+      db.settings.log_level = db.settings.log_level ?? 'info'
+      return db
+    }
   } catch {
     // fall through to seed
   }

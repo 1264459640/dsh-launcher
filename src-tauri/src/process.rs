@@ -235,6 +235,7 @@ pub async fn start_instance_process(
     cmd.stderr(std::process::Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| format!("启动进程失败: {e}"))?;
+    crate::log_info!("实例 {instance_id} 进程已拉起（profile: {profile}）");
 
     // Take the pipes before wrapping the child (the waiter takes ownership of
     // the child itself).
@@ -302,6 +303,11 @@ pub async fn start_instance_process(
                 }
             };
             state.running.lock().await.remove(&waiter_id);
+            if stopped {
+                crate::log_info!("实例 {waiter_id} 已停止（exit code: {code:?}）");
+            } else {
+                crate::log_warn!("实例 {waiter_id} 意外退出（exit code: {code:?}）");
+            }
             emit_status(
                 &waiter_app,
                 &InstanceStatus {
@@ -334,6 +340,7 @@ pub async fn start_instance_process(
                 log_line(&reader_log, &line).await;
                 if let Some(cap) = url_re().captures(&line) {
                     let url = cap[1].to_string();
+                    crate::log_info!("实例 {reader_id} 已就绪：{url}");
                     {
                         let mut running = state.running.lock().await;
                         if let Some(entry) = running.get_mut(&reader_id) {
@@ -386,6 +393,7 @@ pub async fn stop_instance_process(
         .get(instance_id)
         .map(|r| r.kill.clone());
     let Some(kill) = kill else {
+        crate::log_debug!("停止实例 {instance_id}：注册表无记录，补发 stopped 状态");
         emit_status(
             app,
             &InstanceStatus {
@@ -398,6 +406,7 @@ pub async fn stop_instance_process(
         );
         return Ok(());
     };
+    crate::log_info!("收到停止实例 {instance_id} 的请求");
     kill.notify_one();
     // Wait for the waiter task to finish cleanup so callers (e.g. the restart
     // flow) observe a clean registry on return.
@@ -407,6 +416,7 @@ pub async fn stop_instance_process(
             return Ok(());
         }
     }
+    crate::log_error!("停止实例 {instance_id} 超时：进程未响应终止信号");
     Err("停止实例超时（进程未响应终止信号）".to_string())
 }
 

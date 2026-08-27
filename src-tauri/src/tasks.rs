@@ -269,6 +269,7 @@ async fn run_create_instance_task(
                 task.state = TaskState::Done;
                 task.percent = 100;
                 task.instance_id = Some(instance_id.clone());
+                crate::log_info!("任务 {task_id} 完成，实例 {instance_id} 已创建");
                 // The dedicated HOME now exists for real; release the placeholder.
                 task.reserved_home_path = None;
                 emit_progress(app, task_id, TaskState::Done, 100, None, Some(instance_id));
@@ -276,6 +277,7 @@ async fn run_create_instance_task(
             Err(msg) => {
                 task.state = TaskState::Error;
                 task.message = Some(msg.clone());
+                crate::log_error!("任务 {task_id} 失败：{msg}");
                 push_log_locked(task, &format!("error: {msg}"));
                 emit_progress(
                     app,

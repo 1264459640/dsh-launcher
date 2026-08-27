@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
-import type { ThemeMode } from '@/api/types'
+import type { LogLevel, ThemeMode } from '@/api/types'
 import { SUPPORTED_LOCALES } from '@/i18n'
 import { useLauncherStore } from '@/stores/launcher'
 
@@ -14,6 +14,13 @@ const THEME_OPTIONS = computed<{ value: ThemeMode; label: string }[]>(() => [
   { value: 'light', label: t('settings.theme.light') },
   { value: 'dark', label: t('settings.theme.dark') },
   { value: 'system', label: t('settings.theme.system') },
+])
+
+const LOG_LEVEL_OPTIONS = computed<{ value: LogLevel; label: string }[]>(() => [
+  { value: 'debug', label: t('settings.logLevel.debug') },
+  { value: 'info', label: t('settings.logLevel.info') },
+  { value: 'warn', label: t('settings.logLevel.warn') },
+  { value: 'error', label: t('settings.logLevel.error') },
 ])
 
 // --- General settings -------------------------------------------------------
@@ -29,6 +36,10 @@ async function patchSettings(patch: Parameters<typeof api.updateSettings>[0]) {
 
 async function onThemeChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
   await patchSettings({ theme: String(value) as ThemeMode })
+}
+
+async function onLogLevelChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
+  await patchSettings({ log_level: String(value) as LogLevel })
 }
 
 async function onLocaleChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
@@ -141,6 +152,18 @@ const homeColumns = computed(() => [
         <a-form-item>
           <a-switch :model-value="store.settings.autostart" @change="onAutostartChange" />
           <span class="switch-label">{{ t('settings.autostart') }}</span>
+        </a-form-item>
+        <a-form-item :label="t('settings.logLevel.label')">
+          <a-select
+            :model-value="store.settings.log_level"
+            style="width: 220px"
+            @change="onLogLevelChange"
+          >
+            <a-option v-for="o in LOG_LEVEL_OPTIONS" :key="o.value" :value="o.value">
+              {{ o.label }}
+            </a-option>
+          </a-select>
+          <p class="news-source-hint">{{ t('settings.logLevel.hint') }}</p>
         </a-form-item>
         <a-form-item :label="t('settings.newsSource')">
           <a-input

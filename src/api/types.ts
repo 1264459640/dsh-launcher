@@ -29,10 +29,14 @@ export interface LauncherSettings {
   last_instance_id: string | null
   news_source: string
   theme: ThemeMode
+  log_level: LogLevel
 }
 
 /** UI theme: explicit light/dark, or follow the OS color scheme. */
 export type ThemeMode = 'light' | 'dark' | 'system'
+
+/** Runtime log level written to <data_dir>/logs/latest.log. */
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 export type InstanceState = 'stopped' | 'starting' | 'running' | 'exited'
 

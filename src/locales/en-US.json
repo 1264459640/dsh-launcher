@@ -140,6 +140,14 @@
     },
     "minimizeToTray": "Minimize to system tray when closing the main window",
     "autostart": "Launch at login",
+    "logLevel": {
+      "label": "Log level",
+      "debug": "Debug",
+      "info": "Info",
+      "warn": "Warn",
+      "error": "Error",
+      "hint": "Runtime logs go to logs/latest.log in the data directory; the previous log is rotated on every launch."
+    },
     "newsSource": "News source",
     "newsSourcePlaceholder": "https://…/news.md or a local .md/.html path",
     "newsSourceHint": "Markdown (GFM + inline HTML) and HTML are supported; content is XSS-sanitized before being shown in the news area on the home page, and links open in a new window.",

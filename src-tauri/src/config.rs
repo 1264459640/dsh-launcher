@@ -51,6 +51,9 @@ pub struct LauncherSettings {
     /// UI theme: "light" | "dark" | "system" (follow the OS setting).
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Runtime log level: "debug" | "info" | "warn" | "error".
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
 }
 
 fn default_locale() -> String {
@@ -63,6 +66,10 @@ fn default_true() -> bool {
 
 fn default_theme() -> String {
     "system".to_string()
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
 }
 
 fn default_news_source() -> String {
@@ -79,6 +86,7 @@ impl Default for LauncherSettings {
             last_instance_id: None,
             news_source: default_news_source(),
             theme: default_theme(),
+            log_level: default_log_level(),
         }
     }
 }
@@ -131,6 +139,8 @@ pub struct SettingsPatch {
     pub news_source: Option<String>,
     #[serde(default)]
     pub theme: Option<String>,
+    #[serde(default)]
+    pub log_level: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
