@@ -1,13 +1,22 @@
-//! Launcher self-update check against the GitHub releases API.
+//! Launcher self-update check against GitHub releases.
+//!
+//! Uses the `releases.atom` feed rather than the REST API: the feed is
+//! served from the main github.com domain and is not subject to the
+//! unauthenticated API rate limit (60 req/h per IP, whose exhaustion
+//! surfaces as HTTP 403). Draft releases never appear in the feed, and the
+//! prerelease flag is derived from the tag's semver pre-release segment, so
+//! nothing from the API payload is actually needed.
 //!
 //! Channel follows the running build: a `-dev.<run>` build looks at every
 //! published release (including prereleases, and a shipped stable outranks a
-//! dev build), while a stable build only considers non-prerelease releases.
+//! dev build), while a stable build only considers releases without a semver
+//! pre-release segment.
 
-use serde::{Deserialize, Serialize};
+use regex::Regex;
+use serde::Serialize;
+use std::sync::OnceLock;
 
-const RELEASES_URL: &str =
-    "https://api.github.com/repos/dsh-plugins/dsh-launcher/releases?per_page=50";
+const RELEASES_FEED: &str = "https://github.com/dsh-plugins/dsh-launcher/releases.atom";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
@@ -21,20 +30,50 @@ pub struct LauncherUpdateInfo {
     pub published_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 struct ReleaseEntry {
     tag_name: String,
     html_url: String,
-    #[serde(default)]
-    prerelease: bool,
-    #[serde(default)]
-    draft: bool,
     published_at: Option<String>,
 }
 
 /// Parses a release tag ("v0.2.0" / "v0.2.0-dev.12") as semver.
 fn parse_tag(tag: &str) -> Option<semver::Version> {
     semver::Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()
+}
+
+fn entry_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)<entry>(.*?)</entry>").unwrap())
+}
+
+fn link_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"<link[^>]*href="([^"]*/releases/tag/([^"]+))""#).unwrap())
+}
+
+fn updated_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"<updated>([^<]+)</updated>").unwrap())
+}
+
+/// Extracts release entries from a GitHub releases.atom feed. The tag comes
+/// from the entry's `/releases/tag/<tag>` link (not the title, which is a
+/// free-form release name). HTML inside <content> is entity-escaped, so raw
+/// tag matching is safe.
+fn parse_atom_feed(feed: &str) -> Vec<ReleaseEntry> {
+    entry_re()
+        .captures_iter(feed)
+        .filter_map(|entry| {
+            let body = entry.get(1)?.as_str();
+            let link = link_re().captures(body)?;
+            Some(ReleaseEntry {
+                html_url: link[1].to_string(),
+                tag_name: link[2].to_string(),
+                published_at: updated_re().captures(body).map(|c| c[1].to_string()),
+            })
+        })
+        .collect()
 }
 
 /// Picks the newest published release strictly newer than `current`.
@@ -46,9 +85,8 @@ fn pick_latest<'a>(
 ) -> Option<&'a ReleaseEntry> {
     releases
         .iter()
-        .filter(|r| !r.draft)
-        .filter(|r| dev_channel || !r.prerelease)
         .filter_map(|r| parse_tag(&r.tag_name).map(|v| (v, r)))
+        .filter(|(v, _)| dev_channel || v.pre.is_empty())
         .filter(|(v, _)| v > current)
         .max_by(|(a, _), (b, _)| a.cmp(b))
         .map(|(_, r)| r)
@@ -66,9 +104,9 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
         .user_agent("dsh-launcher")
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
-    crate::log_debug!("检查启动器更新：{RELEASES_URL}");
+    crate::log_debug!("检查启动器更新：{RELEASES_FEED}");
     let resp = client
-        .get(RELEASES_URL)
+        .get(RELEASES_FEED)
         .send()
         .await
         .map_err(|e| format!("请求 GitHub Releases 失败: {e}"))?;
@@ -82,8 +120,9 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
     if bytes.len() > MAX_BYTES {
         return Err("GitHub Releases 响应过大".to_string());
     }
-    let releases: Vec<ReleaseEntry> =
-        serde_json::from_slice(&bytes).map_err(|e| format!("解析 releases 失败: {e}"))?;
+    let feed = String::from_utf8(bytes.to_vec()).map_err(|e| format!("响应编码无效: {e}"))?;
+    let releases = parse_atom_feed(&feed);
+    crate::log_debug!("releases.atom 解析出 {} 条发布记录", releases.len());
 
     let latest = pick_latest(&current, dev_channel, &releases);
     match latest {
@@ -108,12 +147,10 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
 mod tests {
     use super::*;
 
-    fn release(tag: &str, prerelease: bool, draft: bool) -> ReleaseEntry {
+    fn release(tag: &str) -> ReleaseEntry {
         ReleaseEntry {
             tag_name: tag.to_string(),
-            html_url: format!("https://example.com/{tag}"),
-            prerelease,
-            draft,
+            html_url: format!("https://example.com/releases/tag/{tag}"),
             published_at: None,
         }
     }
@@ -123,12 +160,46 @@ mod tests {
     }
 
     #[test]
+    fn atom_feed_extracts_tag_link_and_date() {
+        let feed = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en-US">
+  <id>tag:github.com,2008:https://github.com/dsh-plugins/dsh-launcher/releases</id>
+  <link type="text/html" rel="alternate" href="https://github.com/dsh-plugins/dsh-launcher/releases"/>
+  <title>Release notes from dsh-launcher</title>
+  <updated>2026-08-27T03:54:57Z</updated>
+  <entry>
+    <id>tag:github.com,2008:Repository/111/v0.2.0-dev.41</id>
+    <updated>2026-08-27T03:54:57Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/dsh-plugins/dsh-launcher/releases/tag/v0.2.0-dev.41"/>
+    <title>v0.2.0-dev.41</title>
+    <content type="html">&lt;p&gt;notes with a literal &lt;link&gt; inside&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/111/v0.2.0-dev.40</id>
+    <updated>2026-08-27T03:42:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/dsh-plugins/dsh-launcher/releases/tag/v0.2.0-dev.40"/>
+    <title>v0.2.0-dev.40</title>
+    <content type="html">&lt;p&gt;older&lt;/p&gt;</content>
+  </entry>
+</feed>"#;
+        let entries = parse_atom_feed(feed);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].tag_name, "v0.2.0-dev.41");
+        assert_eq!(
+            entries[0].html_url,
+            "https://github.com/dsh-plugins/dsh-launcher/releases/tag/v0.2.0-dev.41"
+        );
+        assert_eq!(
+            entries[0].published_at.as_deref(),
+            Some("2026-08-27T03:54:57Z")
+        );
+        assert_eq!(entries[1].tag_name, "v0.2.0-dev.40");
+    }
+
+    #[test]
     fn stable_channel_ignores_prereleases() {
         let current = semver::Version::parse("0.1.9").unwrap();
-        let releases = vec![
-            release("v0.2.0-dev.7", true, false),
-            release("v0.1.9", false, false),
-        ];
+        let releases = vec![release("v0.2.0-dev.7"), release("v0.1.9")];
         // Only prereleases are newer: a stable build stays put.
         assert_eq!(tag_of(pick_latest(&current, false, &releases)), None);
     }
@@ -136,10 +207,7 @@ mod tests {
     #[test]
     fn stable_channel_finds_newer_stable() {
         let current = semver::Version::parse("0.1.9").unwrap();
-        let releases = vec![
-            release("v0.2.0-dev.7", true, false),
-            release("v0.2.0", false, false),
-        ];
+        let releases = vec![release("v0.2.0-dev.7"), release("v0.2.0")];
         assert_eq!(
             tag_of(pick_latest(&current, false, &releases)),
             Some("v0.2.0".to_string())
@@ -149,10 +217,7 @@ mod tests {
     #[test]
     fn dev_channel_finds_newer_dev_build() {
         let current = semver::Version::parse("0.2.0-dev.3").unwrap();
-        let releases = vec![
-            release("v0.2.0-dev.2", true, false),
-            release("v0.2.0-dev.5", true, false),
-        ];
+        let releases = vec![release("v0.2.0-dev.2"), release("v0.2.0-dev.5")];
         assert_eq!(
             tag_of(pick_latest(&current, true, &releases)),
             Some("v0.2.0-dev.5".to_string())
@@ -162,7 +227,7 @@ mod tests {
     #[test]
     fn dev_channel_prefers_shipped_stable_over_dev_build() {
         let current = semver::Version::parse("0.2.0-dev.9").unwrap();
-        let releases = vec![release("v0.2.0", false, false)];
+        let releases = vec![release("v0.2.0")];
         assert_eq!(
             tag_of(pick_latest(&current, true, &releases)),
             Some("v0.2.0".to_string())
@@ -170,12 +235,11 @@ mod tests {
     }
 
     #[test]
-    fn drafts_and_same_version_are_excluded() {
+    fn same_version_and_unparsable_tags_are_excluded() {
         let current = semver::Version::parse("0.2.0-dev.9").unwrap();
         let releases = vec![
-            release("v0.2.0-dev.10", true, true), // draft
-            release("v0.2.0-dev.9", true, false), // same as current
-            release("garbage-tag", true, false),  // unparsable
+            release("v0.2.0-dev.9"), // same as current
+            release("garbage-tag"),  // unparsable
         ];
         assert_eq!(tag_of(pick_latest(&current, true, &releases)), None);
     }
