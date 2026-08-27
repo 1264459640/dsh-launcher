@@ -16,8 +16,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-const RELEASES_API: &str =
-    "/repos/dsh-plugins/dsh-launcher/releases?per_page=100";
+const RELEASES_API: &str = "/repos/dsh-plugins/dsh-launcher/releases?per_page=100";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
@@ -54,8 +53,8 @@ struct ApiRelease {
 /// Normalises API items into `ReleaseEntry`es, newest first (the API returns
 /// releases in reverse-chronological order, but order must not be relied on).
 fn parse_releases_json(body: &[u8]) -> Result<Vec<ReleaseEntry>, String> {
-    let api: Vec<ApiRelease> = serde_json::from_slice(body)
-        .map_err(|e| format!("解析 GitHub Releases JSON 失败: {e}"))?;
+    let api: Vec<ApiRelease> =
+        serde_json::from_slice(body).map_err(|e| format!("解析 GitHub Releases JSON 失败: {e}"))?;
     let mut out: Vec<ReleaseEntry> = api
         .into_iter()
         .map(|r| ReleaseEntry {
