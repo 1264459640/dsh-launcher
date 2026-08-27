@@ -655,6 +655,9 @@ pub async fn uninstall_plugin(
     }
 
     // 3. pnpm remove the package from the profile (reuses the shared store).
+    //    `pnpm remove` re-resolves the tree, so the peer policy must hold here
+    //    too or the removal can pull core copies back in.
+    ensure_profile_npmrc(&dir)?;
     let store_dir = state.data_dir.join(".pnpm-store");
     let pnpm_prog = ensure_pnpm_for_plugins(&app, &state, "uninstall").await?;
     let mut cmd = tokio::process::Command::new(&pnpm_prog);
@@ -1003,6 +1006,8 @@ async fn install_into_profile(
     // ERR_PNPM_IGNORED_BUILDS) requires `allowBuilds: <name>: true` entries.
     // Write both so the profile works on any pnpm version.
     ensure_build_scripts_allowed(dir)?;
+    // Never let a plugin's peers pull a second copy of a core package in.
+    ensure_profile_npmrc(dir)?;
 
     let store_dir = state.data_dir.join(".pnpm-store");
     let pnpm_prog = ensure_pnpm_for_plugins(app, state, task_id).await?;
@@ -1073,6 +1078,62 @@ fn task_log_mentions_ignored_builds(state: &State<'_, AppState>, task_id: &str) 
             })
         })
         .unwrap_or(false)
+}
+
+/// Pins `auto-install-peers=false` in a profile's `.npmrc`.
+///
+/// A DSH profile must resolve nothing from the `@deepseek-ai` core scope —
+/// core comes from the CLI's own dependency tree. With auto-install-peers on
+/// (a common global pnpm setting), installing a plugin whose peers include a
+/// core package drops a second copy of that core package into the profile,
+/// which is the duplicated-Symbol failure the doctor check reports. Writing
+/// the setting per profile makes the install independent of the user's global
+/// pnpm configuration.
+pub(crate) fn ensure_profile_npmrc(dir: &std::path::Path) -> Result<(), String> {
+    const KEY: &str = "auto-install-peers";
+    let path = dir.join(".npmrc");
+    let raw = if path.exists() {
+        std::fs::read_to_string(&path).map_err(|e| format!("读取 .npmrc 失败: {e}"))?
+    } else {
+        String::new()
+    };
+
+    let mut lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
+    let mut found = false;
+    let mut changed = false;
+    for line in lines.iter_mut() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+        let Some((k, v)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if k.trim() != KEY {
+            continue;
+        }
+        found = true;
+        if v.trim() != "false" {
+            *line = format!("{KEY}=false");
+            changed = true;
+        }
+    }
+    if !found {
+        // Keep a short rationale in the file: it is user-visible state.
+        if !lines.is_empty() && !lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+            lines.push(String::new());
+        }
+        lines.push("# DSH: core packages come from the CLI dependency tree;".to_string());
+        lines.push("# a profile must never resolve its own copy.".to_string());
+        lines.push(format!("{KEY}=false"));
+        changed = true;
+    }
+    if changed {
+        let mut out = lines.join("\n");
+        out.push('\n');
+        std::fs::write(&path, out).map_err(|e| format!("写入 .npmrc 失败: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Make sure a profile's pnpm-workspace.yaml opts into dependency build
@@ -1546,6 +1607,48 @@ mod tests {
         ensure_build_scripts_allowed(&dir).unwrap();
         let after = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).unwrap();
         assert_eq!(before, after, "must be idempotent");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ensure_profile_npmrc_pins_auto_install_peers_false() {
+        let dir = std::env::temp_dir().join(format!("dsh-npmrc-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let npmrc = dir.join(".npmrc");
+
+        // Fresh profile: the key is written.
+        ensure_profile_npmrc(&dir).unwrap();
+        let fresh = std::fs::read_to_string(&npmrc).unwrap();
+        assert!(fresh.contains("auto-install-peers=false"), "fresh: {fresh}");
+
+        // Idempotent.
+        ensure_profile_npmrc(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&npmrc).unwrap(), fresh);
+
+        // An opposite existing value is normalized, other keys are preserved.
+        std::fs::write(
+            &npmrc,
+            "registry=https://example.com/\nauto-install-peers=true\n",
+        )
+        .unwrap();
+        ensure_profile_npmrc(&dir).unwrap();
+        let fixed = std::fs::read_to_string(&npmrc).unwrap();
+        assert!(fixed.contains("auto-install-peers=false"), "fixed: {fixed}");
+        assert!(!fixed.contains("auto-install-peers=true"), "fixed: {fixed}");
+        assert!(
+            fixed.contains("registry=https://example.com/"),
+            "other keys must survive: {fixed}"
+        );
+
+        // A commented-out key is not treated as set.
+        std::fs::write(&npmrc, "# auto-install-peers=true\n").unwrap();
+        ensure_profile_npmrc(&dir).unwrap();
+        let commented = std::fs::read_to_string(&npmrc).unwrap();
+        assert!(
+            commented.contains("\nauto-install-peers=false"),
+            "commented: {commented}"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

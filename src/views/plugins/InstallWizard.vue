@@ -85,6 +85,7 @@ async function startInstall() {
       profile: profile.value,
     })
     Message.success(t('plugins.installTaskAdded'))
+    Message.info(t('plugins.installRestartHint'))
     await store.refreshTasks()
     router.push({ name: 'tasks' })
   } catch (e) {

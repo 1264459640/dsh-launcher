@@ -347,6 +347,7 @@ async function onUninstallPlugin(p: InstalledPlugin) {
       pluginId: p.id,
     })
     Message.success(t('instanceEdit.pluginUninstalled', { name: p.id }))
+    Message.info(t('instanceEdit.pluginRestartHint'))
     await loadPlugins()
   } catch (e) {
     Message.error(String(e))
