@@ -187,7 +187,8 @@
       "basic": "Basic",
       "env": "Environment",
       "profiles": "Profiles",
-      "plugins": "Plugins"
+      "plugins": "Plugins",
+      "terminal": "Terminal"
     },
     "name": "Instance name",
     "namePlaceholder": "e.g. Main instance",
@@ -250,7 +251,13 @@
     "pluginsBatchEnable": "Batch enable ({count})",
     "pluginsBatchDisable": "Batch disable ({count})",
     "pluginsBatchEnabled": "Enabled {count} plugins",
-    "pluginsBatchDisabled": "Disabled {count} plugins"
+    "pluginsBatchDisabled": "Disabled {count} plugins",
+    "terminalDesc": "Embedded system terminal (PTY) for this instance, working directory is its DSH_HOME. The dsh command inside is redirected to this instance's DSH CLI, so you can drive this instance with dsh directly.",
+    "terminalRunning": "Running",
+    "terminalStarting": "Starting…",
+    "terminalExited": "Session exited",
+    "terminalRestart": "Restart session",
+    "terminalNoHome": "Instance missing or no DSH_HOME configured"
   },
   "tasks": {
     "title": "Task Manager",

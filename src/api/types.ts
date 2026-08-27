@@ -209,3 +209,36 @@ export interface UninstallPluginInput {
   profile: string
   pluginId: string
 }
+
+// ---------------------------------------------------------------------------
+// Embedded terminal
+// ---------------------------------------------------------------------------
+
+/** Input for starting / restarting an instance's embedded terminal session. */
+export interface StartTerminalInput {
+  instanceId: string
+  cols: number
+  rows: number
+}
+
+/** Input for writing / resizing / closing a session. */
+export interface TerminalIpcInput {
+  instanceId: string
+  /** For write: base64 of raw bytes to feed the PTY. */
+  data?: string
+  cols?: number
+  rows?: number
+}
+
+/** Session state pushed to the frontend. */
+export interface TerminalStatus {
+  instanceId: string
+  running: boolean
+  exitCode: number | null
+}
+
+/** Raw PTY output pushed as `terminal://data`. */
+export interface TerminalData {
+  instanceId: string
+  data: string
+}

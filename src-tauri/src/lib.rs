@@ -6,6 +6,7 @@ mod plugins;
 mod process;
 mod runtime;
 mod tasks;
+mod terminal;
 mod tray;
 mod update;
 mod windows;
@@ -28,6 +29,8 @@ pub struct AppState {
     pub profile_locks: tokio::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     /// Instance whose webview window was opened/focused most recently.
     pub last_focused_instance: StdMutex<Option<String>>,
+    /// Embedded PTY terminal sessions per instance id.
+    pub terminals: tokio::sync::Mutex<HashMap<String, terminal::TerminalSession>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -65,6 +68,7 @@ pub fn run() {
                 tasks: tokio::sync::Mutex::new(HashMap::new()),
                 profile_locks: tokio::sync::Mutex::new(HashMap::new()),
                 last_focused_instance: StdMutex::new(None),
+                terminals: tokio::sync::Mutex::new(HashMap::new()),
             });
 
             // System tray with dynamic menu.
@@ -131,6 +135,10 @@ pub fn run() {
             plugins::set_plugins_enabled,
             plugins::uninstall_plugin,
             plugins::start_install_plugin_task,
+            terminal::start_terminal_session,
+            terminal::write_terminal_input,
+            terminal::resize_terminal_session,
+            terminal::close_terminal_session,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -140,6 +148,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 let state = app_handle.state::<AppState>();
                 process::kill_all(&state);
+                terminal::kill_all(&state);
             }
         });
 }

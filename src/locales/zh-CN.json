@@ -187,7 +187,8 @@
       "basic": "基本设置",
       "env": "环境变量",
       "profiles": "Profile",
-      "plugins": "插件"
+      "plugins": "插件",
+      "terminal": "终端"
     },
     "name": "实例名称",
     "namePlaceholder": "例如：主实例",
@@ -208,13 +209,13 @@
     "profileCreatePlaceholder": "输入新 Profile 名称后创建",
     "profileCreate": "创建",
     "profileCreated": "Profile「{name}」已创建",
-    "env": "环境变量复写",
-    "envDesc": "启动实例时注入的运行时环境变量，会覆盖同名系统变量。DSH_HOME 由启动器按所选 DSH_HOME 注入，不可复写。",
+    "env": "环境变量覆写",
+    "envDesc": "启动实例时注入的运行时环境变量，会覆盖同名系统变量。DSH_HOME 由启动器按所选 DSH_HOME 注入，不可覆写。",
     "envKey": "变量名",
     "envValue": "值",
     "envAdd": "添加一行",
     "envKeyInvalid": "变量名需匹配 [A-Za-z_][A-Za-z0-9_]*",
-    "envKeyReserved": "DSH_HOME 由启动器管理，不可复写",
+    "envKeyReserved": "DSH_HOME 由启动器管理，不可覆写",
     "profilesDesc": "管理该实例 DSH_HOME 下的 Profile。设为默认后，启动实例时将默认使用该 Profile。",
     "profilesEmpty": "暂无 Profile，点击下方按钮添加",
     "profilesNeedHome": "请先在「基本设置」中选择一个 DSH_HOME（非专属目录），即可管理其中的 Profile。",
@@ -250,7 +251,13 @@
     "pluginsBatchEnable": "批量启用（{count}）",
     "pluginsBatchDisable": "批量禁用（{count}）",
     "pluginsBatchEnabled": "已启用 {count} 个插件",
-    "pluginsBatchDisabled": "已禁用 {count} 个插件"
+    "pluginsBatchDisabled": "已禁用 {count} 个插件",
+    "terminalDesc": "嵌入当前实例的系统终端（PTY），工作目录为该实例的 DSH_HOME。终端内的 dsh 命令已重定向到当前实例的 DSH CLI，可直接执行 dsh 操作该实例。",
+    "terminalRunning": "运行中",
+    "terminalStarting": "启动中…",
+    "terminalExited": "会话已退出",
+    "terminalRestart": "重启会话",
+    "terminalNoHome": "实例不存在或未配置 DSH_HOME"
   },
   "tasks": {
     "title": "任务管理",

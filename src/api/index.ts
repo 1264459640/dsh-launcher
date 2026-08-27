@@ -20,9 +20,13 @@ import type {
   RemoteVersion,
   RuntimeStatus,
   SetPluginsEnabledInput,
+  StartTerminalInput,
   TaskInfo,
   TaskLog,
   TaskProgress,
+  TerminalData,
+  TerminalIpcInput,
+  TerminalStatus,
   UninstallPluginInput,
 } from './types'
 
@@ -115,6 +119,8 @@ type Listener<T> = (payload: T) => void
 const statusListeners = new Set<Listener<InstanceStatus>>()
 const taskProgressListeners = new Set<Listener<TaskProgress>>()
 const taskLogListeners = new Set<Listener<TaskLog>>()
+const terminalDataListeners = new Set<Listener<TerminalData>>()
+const terminalStatusListeners = new Set<Listener<TerminalStatus>>()
 
 function emitStatus(s: InstanceStatus) {
   statusListeners.forEach((fn) => fn(s))
@@ -656,6 +662,18 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       return undefined as T
     case 'uninstall_plugin':
       return undefined as T
+    case 'start_terminal_session': {
+      const input = args?.input as StartTerminalInput
+      return {
+        instanceId: input.instanceId,
+        running: true,
+        exitCode: null,
+      } as T
+    }
+    case 'write_terminal_input':
+    case 'resize_terminal_session':
+    case 'close_terminal_session':
+      return undefined as T
     case 'start_install_plugin_task': {
       const input = args?.input as InstallPluginInput
       const id = mockNewId('t')
@@ -749,6 +767,34 @@ export const api = {
   setPluginsEnabled: (input: SetPluginsEnabledInput) => call<void>('set_plugins_enabled', { input }),
   uninstallPlugin: (input: UninstallPluginInput) => call<void>('uninstall_plugin', { input }),
   startInstallPluginTask: (input: InstallPluginInput) => call<string>('start_install_plugin_task', { input }),
+
+  // Embedded terminal (PTY session)
+  startTerminalSession: (input: StartTerminalInput) =>
+    call<TerminalStatus>('start_terminal_session', { input }),
+  writeTerminalInput: (input: TerminalIpcInput) =>
+    call<void>('write_terminal_input', { input }),
+  resizeTerminalSession: (input: TerminalIpcInput) =>
+    call<void>('resize_terminal_session', { input }),
+  closeTerminalSession: (input: TerminalIpcInput) =>
+    call<void>('close_terminal_session', { input }),
+  async onTerminalData(cb: Listener<TerminalData>): Promise<() => void> {
+    if (isTauri) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const un = await listen<TerminalData>('terminal://data', (e) => cb(e.payload))
+      return un
+    }
+    terminalDataListeners.add(cb)
+    return () => terminalDataListeners.delete(cb)
+  },
+  async onTerminalStatus(cb: Listener<TerminalStatus>): Promise<() => void> {
+    if (isTauri) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const un = await listen<TerminalStatus>('terminal://status', (e) => cb(e.payload))
+      return un
+    }
+    terminalStatusListeners.add(cb)
+    return () => terminalStatusListeners.delete(cb)
+  },
 
   async onInstanceStatus(cb: Listener<InstanceStatus>): Promise<() => void> {
     if (isTauri) {

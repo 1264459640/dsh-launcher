@@ -531,7 +531,7 @@ fn read_disabled_ids(dir: &std::path::Path) -> std::collections::HashSet<String>
 }
 
 /// Resolve an instance to (home_path, version_dir).
-fn resolve_instance(
+pub(crate) fn resolve_instance(
     state: &State<'_, AppState>,
     instance_id: &str,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {

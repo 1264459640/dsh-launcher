@@ -6,6 +6,7 @@ import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
 import type { DshInstance, InstalledPlugin } from '@/api/types'
+import TerminalEmbed from './TerminalEmbed.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,7 +18,7 @@ const isNew = computed(() => !editingId.value)
 
 // --- Sidebar tabs ---------------------------------------------------------------
 
-type TabKey = 'basic' | 'env' | 'profiles' | 'plugins'
+type TabKey = 'basic' | 'env' | 'profiles' | 'plugins' | 'terminal'
 const activeTab = ref<TabKey>('basic')
 
 // --- Form state ---------------------------------------------------------------
@@ -397,6 +398,10 @@ const rowSelection = {
   showCheckedAll: true,
   onlyCurrent: true,
 }
+
+// --- Terminal tab ------------------------------------------------------------
+
+const terminalRunning = ref(false)
 </script>
 
 <template>
@@ -407,6 +412,7 @@ const rowSelection = {
         <a-menu-item key="env">{{ t('instanceEdit.tabs.env') }}</a-menu-item>
         <a-menu-item key="profiles">{{ t('instanceEdit.tabs.profiles') }}</a-menu-item>
         <a-menu-item key="plugins">{{ t('instanceEdit.tabs.plugins') }}</a-menu-item>
+        <a-menu-item key="terminal">{{ t('instanceEdit.tabs.terminal') }}</a-menu-item>
       </a-menu>
     </aside>
     <section class="edit-content">
@@ -577,7 +583,7 @@ const rowSelection = {
           </div>
 
           <!-- Plugins -->
-          <div v-else class="dl-card edit-card">
+          <div v-else-if="activeTab === 'plugins'" class="dl-card edit-card">
             <h4 class="env-title">{{ t('instanceEdit.tabs.plugins') }}</h4>
             <p class="env-desc">{{ t('instanceEdit.pluginsDesc') }}</p>
 
@@ -678,6 +684,26 @@ const rowSelection = {
 
             <a-alert v-else type="info">
               {{ t('instanceEdit.profilesNeedHome') }}
+            </a-alert>
+          </div>
+
+          <!-- Terminal -->
+          <div v-else class="dl-card edit-card">
+            <h4 class="env-title">{{ t('instanceEdit.tabs.terminal') }}</h4>
+            <p class="env-desc">{{ t('instanceEdit.terminalDesc') }}</p>
+
+            <template v-if="editingId">
+              <TerminalEmbed
+                v-if="editingId"
+                :key="editingId"
+                :instance-id="editingId"
+                class="terminal-embed"
+                @status="(v: boolean) => (terminalRunning = v)"
+              />
+            </template>
+
+            <a-alert v-else type="info">
+              {{ t('instanceEdit.terminalNoHome') }}
             </a-alert>
           </div>
         </div>
@@ -836,6 +862,28 @@ const rowSelection = {
   display: flex;
   gap: 12px;
   justify-content: center;
+}
+
+.terminal-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.terminal-embed {
+  height: 480px;
+}
+
+.terminal-hint {
+  margin: 4px 0 12px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.terminal-alert {
+  margin-top: 8px;
+  max-width: 640px;
 }
 
 @media (max-width: 720px) {
