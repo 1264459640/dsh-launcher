@@ -105,7 +105,9 @@ jobs:
             runner: windows-latest
             target: x86_64-pc-windows-msvc
             cache_key: windows-x86_64
-            bundle_args: --bundles nsis,msi
+            # MSI 不可用：WiX 要求版本号预发布段为纯数字且 ≤65535，与
+            # 0.2.0-dev.N 的开发版本号冲突；Windows 分发统一走 NSIS。
+            bundle_args: --bundles nsis
           - platform: linux
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
