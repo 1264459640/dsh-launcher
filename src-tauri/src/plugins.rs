@@ -430,15 +430,6 @@ fn read_profile_manifest(dir: &std::path::Path) -> Result<serde_json::Value, Str
     serde_json::from_str(&raw).map_err(|e| format!("解析 package.json 失败: {e}"))
 }
 
-fn write_profile_manifest(dir: &std::path::Path, value: &serde_json::Value) -> Result<(), String> {
-    let path = dir.join("package.json");
-    let raw = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    let tmp = dir.join("package.json.tmp");
-    std::fs::write(&tmp, raw).map_err(|e| format!("写入 package.json 失败: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("保存 package.json 失败: {e}"))?;
-    Ok(())
-}
-
 /// cordis id for a package: bundles register under their unscoped short name
 /// (dsh-auxiliary) unless the package declares otherwise. We default to the
 /// last path segment without the scope.
@@ -601,43 +592,42 @@ pub struct UninstallPluginInput {
     pub plugin_id: String,
 }
 
-/// Uninstalls a plugin from an instance's profile: removes it from the
-/// manifest (dependencies + bundles), drops its cordis.patch.yml rows
-/// (insert / disabled), and runs `pnpm remove` to delete the package.
+/// Uninstalls a plugin from an instance's profile through
+/// `dsh plugin --profile <name> remove <id>` (the CLI removes the dependency
+/// and reconciles dsh.profile.bundles), then drops the plugin's
+/// cordis.patch.yml rows (insert / disabled), which the CLI does not manage.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn uninstall_plugin(
     app: AppHandle,
     state: State<'_, AppState>,
     input: UninstallPluginInput,
 ) -> Result<(), String> {
-    let (home_path, _version) = resolve_instance(&state, &input.instance_id)?;
+    let (home_path, version_dir) = resolve_instance(&state, &input.instance_id)?;
     let dir = profile_dir(&home_path, &input.profile);
     if !dir.exists() {
         return Err(format!("Profile「{}」不存在", input.profile));
     }
 
-    // 1. Remove from the manifest (dependencies + bundles).
-    let mut manifest = read_profile_manifest(&dir)?;
-    let mut changed = false;
-    if let Some(deps) = manifest
-        .get_mut("dependencies")
-        .and_then(|d| d.as_object_mut())
-    {
-        if deps.remove(&input.plugin_id).is_some() {
-            changed = true;
-        }
-    }
-    if let Some(bundles) = manifest
-        .pointer_mut("/dsh/profile/bundles")
-        .and_then(|b| b.as_array_mut())
-    {
-        let before = bundles.len();
-        bundles.retain(|b| b.as_str() != Some(input.plugin_id.as_str()));
-        changed |= bundles.len() != before;
-    }
-    if changed {
-        write_profile_manifest(&dir, &manifest)?;
-    }
+    // 1. `dsh plugin remove <id>` through the instance's own CLI: it removes
+    //    the dependency and reconciles dsh.profile.bundles (a name that is no
+    //    longer an installed bundle leaves the layer stack), so the manifest is
+    //    never edited by hand here.
+    run_dsh_plugin(
+        &app,
+        &state,
+        "uninstall",
+        &PluginCliTarget {
+            version_dir: &version_dir,
+            home_path: &home_path,
+            profile: &input.profile,
+        },
+        &PluginCliOp {
+            subcommand: "remove",
+            spec: &input.plugin_id,
+            loglevel: "warn",
+        },
+    )
+    .await?;
 
     // 2. Drop the plugin's rows from cordis.patch.yml (insert rows mount the
     //    plugin; disabled rows gate it). Reuse the block-stripping logic in
@@ -654,27 +644,7 @@ pub async fn uninstall_plugin(
         }
     }
 
-    // 3. pnpm remove the package from the profile (reuses the shared store).
-    //    `pnpm remove` re-resolves the tree, so the peer policy must hold here
-    //    too or the removal can pull core copies back in.
-    ensure_profile_npmrc(&dir)?;
-    let store_dir = state.data_dir.join(".pnpm-store");
-    let pnpm_prog = ensure_pnpm_for_plugins(&app, &state, "uninstall").await?;
-    let mut cmd = tokio::process::Command::new(&pnpm_prog);
-    crate::process::hide_console(&mut cmd);
-    cmd.args(["remove", &input.plugin_id])
-        .arg("--prefix")
-        .arg(&dir)
-        .arg("--store-dir")
-        .arg(&store_dir)
-        .args(["--loglevel=warn"]);
-    if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
-        let registry = registry.trim().to_string();
-        if !registry.is_empty() {
-            cmd.args(["--registry", &registry]);
-        }
-    }
-    crate::tasks::run_streamed_command(&app, &state, "uninstall", cmd, "pnpm remove").await
+    Ok(())
 }
 
 /// Strips every cordis.patch.yml block whose id equals `cordis_id` (matching
@@ -917,7 +887,7 @@ async fn do_install_plugin(
     task_id: &str,
     input: &InstallPluginInput,
 ) -> Result<(), String> {
-    let (home_path, _version) = resolve_instance(state, &input.instance_id)?;
+    let (home_path, version_dir) = resolve_instance(state, &input.instance_id)?;
     let dir = profile_dir(&home_path, &input.profile);
 
     // Spec: npm packages use <pkg>@<version>; alpha (commit) installs from the
@@ -944,109 +914,116 @@ async fn do_install_plugin(
     )
     .await;
 
-    // 1. pnpm add into the profile dir (with the build-scripts opt-in and the
-    //    shared store, mirroring install_version_streamed).
-    install_into_profile(app, state, task_id, &dir, &spec).await?;
+    // 1. `dsh plugin add <spec>` through the instance's own CLI: it installs
+    //    into the profile dir and reconciles dsh.profile.bundles itself, so the
+    //    launcher neither drives pnpm nor guesses the layer list.
+    run_dsh_plugin(
+        app,
+        state,
+        task_id,
+        &PluginCliTarget {
+            version_dir: &version_dir,
+            home_path: &home_path,
+            profile: &input.profile,
+        },
+        &PluginCliOp {
+            subcommand: "add",
+            spec: &spec,
+            loglevel: "http",
+        },
+    )
+    .await?;
 
-    // 2. Register the bundle in the profile manifest.
-    register_bundle_in_manifest(&dir, &input.plugin_id, &input.version)?;
-    crate::tasks::push_task_log_pub(app, state, task_id, "已在 package.json 注册 bundle").await;
-
-    // 3. A bundle plugin (its package.json declares `dsh.bundle`) is mounted
-    //    automatically from dsh.profile.bundles — writing an additional
-    //    cordis.patch.yml insert row would mount it a second time and the
-    //    loader would fail with `duplicate loader entry id`. Only a plain
-    //    npm package without `dsh.bundle` needs the explicit insert row.
-    if is_bundle_plugin(&dir, &input.plugin_id) {
+    // 2. Bundle registration is the CLI's job (reconciled from the installed
+    //    state). Read back its verdict: a package listed in
+    //    dsh.profile.bundles is mounted as a profile layer, and adding a
+    //    cordis.patch.yml insert row on top would mount it twice — the loader
+    //    then fails with `duplicate loader entry id`. Only a plain npm package
+    //    (no `dsh.bundle.patch`, so not reconciled into bundles) needs the
+    //    explicit insert row.
+    if manifest_lists_bundle(&dir, &input.plugin_id)? {
         crate::tasks::push_task_log_pub(
             app,
             state,
             task_id,
-            "检测到 bundle 插件，已通过 bundles 注册（跳过 cordis insert 行）",
+            "CLI 已将插件登记为 profile 层（dsh.profile.bundles），跳过 cordis insert 行",
         )
         .await;
     } else {
         ensure_cordis_insert(&dir, &input.plugin_id)?;
-        crate::tasks::push_task_log_pub(app, state, task_id, "已写入 cordis.patch.yml insert 行")
-            .await;
+        crate::tasks::push_task_log_pub(
+            app,
+            state,
+            task_id,
+            "插件未声明 dsh.bundle.patch，已写入 cordis.patch.yml insert 行以挂载",
+        )
+        .await;
     }
 
     Ok(())
 }
 
-/// Whether the installed plugin is a DSH bundle (its package.json has a
-/// `dsh.bundle` section). Bundles are auto-mounted from dsh.profile.bundles.
-fn is_bundle_plugin(profile_dir: &std::path::Path, plugin_id: &str) -> bool {
-    let pkg_path = profile_dir
-        .join("node_modules")
-        .join(plugin_id)
-        .join("package.json");
-    let Ok(raw) = std::fs::read_to_string(&pkg_path) else {
-        return false;
-    };
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return false;
-    };
-    doc.pointer("/dsh/bundle").is_some()
+/// Whether the profile manifest lists the package in `dsh.profile.bundles`
+/// after the CLI reconciled it.
+fn manifest_lists_bundle(profile_dir: &std::path::Path, plugin_id: &str) -> Result<bool, String> {
+    let manifest = read_profile_manifest(profile_dir)?;
+    Ok(manifest
+        .pointer("/dsh/profile/bundles")
+        .and_then(|b| b.as_array())
+        .map(|arr| arr.iter().any(|b| b.as_str() == Some(plugin_id)))
+        .unwrap_or(false))
 }
 
-/// pnpm add <spec> into a profile dir with the build-scripts opt-in.
-async fn install_into_profile(
+/// Which instance/profile a `dsh plugin` invocation targets.
+struct PluginCliTarget<'a> {
+    version_dir: &'a std::path::Path,
+    home_path: &'a std::path::Path,
+    profile: &'a str,
+}
+
+/// What the invocation does: a pnpm subcommand (`add` / `remove`), its
+/// package spec, and the pnpm log level to forward.
+struct PluginCliOp<'a> {
+    subcommand: &'a str,
+    spec: &'a str,
+    loglevel: &'a str,
+}
+
+/// Runs one `dsh plugin --profile <name> <pnpm subcommand> <spec/id>` through
+/// the instance's own CLI, streaming its output into the task log.
+///
+/// The launcher still prepares the two things the CLI does not: the
+/// build-scripts opt-in (pnpm ≥10 `onlyBuiltDependencies` / pnpm 11
+/// `allowBuilds`) and the profile `.npmrc` peer policy. When pnpm 11 blocks
+/// build scripts it writes `set this to true or false` placeholders and fails
+/// with ERR_PNPM_IGNORED_BUILDS; the placeholders are approved and the
+/// invocation is retried once so native deps (node-pty, koffi, esbuild,
+/// sharp…) actually build. The CLI prints the same advice for git-hosted
+/// plugins, which this automates.
+async fn run_dsh_plugin(
     app: &AppHandle,
     state: &State<'_, AppState>,
     task_id: &str,
-    dir: &std::path::Path,
-    spec: &str,
+    target: &PluginCliTarget<'_>,
+    op: &PluginCliOp<'_>,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("创建 profile 目录失败: {e}"))?;
-
-    // Opt into dependency build scripts. pnpm>=10 uses `onlyBuiltDependencies`,
-    // while pnpm 11 (which writes the `set this to true or false` placeholder
-    // into `allowBuilds` for every ignored build and fails with
-    // ERR_PNPM_IGNORED_BUILDS) requires `allowBuilds: <name>: true` entries.
-    // Write both so the profile works on any pnpm version.
-    ensure_build_scripts_allowed(dir)?;
+    let (version_dir, home_path, profile) = (target.version_dir, target.home_path, target.profile);
+    let (subcommand, spec, loglevel) = (op.subcommand, op.spec, op.loglevel);
+    let dir = profile_dir(home_path, profile);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建 profile 目录失败: {e}"))?;
+    ensure_build_scripts_allowed(&dir)?;
     // Never let a plugin's peers pull a second copy of a core package in.
-    ensure_profile_npmrc(dir)?;
+    ensure_profile_npmrc(&dir)?;
 
-    let store_dir = state.data_dir.join(".pnpm-store");
     let pnpm_prog = ensure_pnpm_for_plugins(app, state, task_id).await?;
+    let what = format!("dsh plugin {subcommand}");
 
-    // pnpm 11 blocks dependency build scripts unless every package with an
-    // install script is listed under `allowBuilds`. On the first attempt it
-    // writes a `set this to true or false` placeholder into
-    // pnpm-workspace.yaml and fails with ERR_PNPM_IGNORED_BUILDS; we convert
-    // that placeholder to `true` and retry once so native deps (node-pty,
-    // koffi, esbuild, sharp…) actually build.
     for attempt in 1..=2 {
-        let mut cmd = tokio::process::Command::new(&pnpm_prog);
-        crate::process::hide_console(&mut cmd);
-        cmd.args(["add", spec])
-            .arg("--prefix")
-            .arg(dir)
-            .arg("--store-dir")
-            .arg(&store_dir)
-            .args(["--loglevel=http"])
-            .args([
-                "--fetch-timeout",
-                "300000",
-                "--fetch-retries",
-                "5",
-                "--fetch-retry-maxtimeout",
-                "120000",
-                "--network-concurrency",
-                "4",
-            ]);
-        if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
-            let registry = registry.trim().to_string();
-            if !registry.is_empty() {
-                cmd.args(["--registry", &registry]);
-            }
-        }
-        cmd.stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+        let mut args: Vec<String> = vec![subcommand.to_string(), spec.to_string()];
+        args.extend(forwarded_pnpm_flags(state, loglevel));
+        let cmd = dsh_plugin_command(version_dir, home_path, profile, &args, &pnpm_prog)?;
 
-        match crate::tasks::run_streamed_command(app, state, task_id, cmd, "pnpm add").await {
+        match crate::tasks::run_streamed_command(app, state, task_id, cmd, &what).await {
             Ok(()) => return Ok(()),
             Err(_e) if attempt == 1 && task_log_mentions_ignored_builds(state, task_id) => {
                 crate::tasks::push_task_log_pub(
@@ -1056,7 +1033,7 @@ async fn install_into_profile(
                     "pnpm 11 拦截了依赖构建脚本，正在批准 allowBuilds 后重试…",
                 )
                 .await;
-                ensure_build_scripts_allowed(dir)?;
+                ensure_build_scripts_allowed(&dir)?;
             }
             Err(e) => return Err(e),
         }
@@ -1078,6 +1055,97 @@ fn task_log_mentions_ignored_builds(state: &State<'_, AppState>, task_id: &str) 
             })
         })
         .unwrap_or(false)
+}
+
+/// Builds a `dsh plugin --profile <name> <pnpm args…>` invocation for an
+/// instance's own CLI version.
+///
+/// Profile plugin management is a CLI-private flow: `dsh plugin` initializes
+/// the profile when needed, forwards the remaining arguments to pnpm with
+/// cwd = the profile directory, and then reconciles `dsh.profile.bundles`
+/// against the *installed* state (a dependency whose package declares
+/// `dsh.bundle.patch` joins the layer stack; one that no longer does leaves
+/// it). Driving pnpm ourselves would produce a tree the CLI does not expect
+/// and would leave the layer list to be guessed at, so every install and
+/// removal goes through the CLI of the version that instance runs.
+///
+/// The CLI resolves pnpm from PATH, so the launcher's pinned pnpm
+/// (`REQUIRED_PNPM_MAJOR`) is prepended to PATH: the pin then also applies
+/// inside the CLI's own pnpm invocation.
+fn dsh_plugin_command(
+    version_dir: &std::path::Path,
+    home_path: &std::path::Path,
+    profile: &str,
+    pnpm_args: &[String],
+    pnpm_prog: &std::path::Path,
+) -> Result<tokio::process::Command, String> {
+    let bin = crate::process::version_bin(version_dir);
+    if !crate::process::version_bin_ready(version_dir) {
+        return Err(format!(
+            "版本安装不完整（缺少 {}），请重新安装该 DSH 版本",
+            bin.display()
+        ));
+    }
+
+    let mut cmd = tokio::process::Command::new(crate::process::node());
+    crate::process::hide_console(&mut cmd);
+    cmd.arg(&bin)
+        .arg("plugin")
+        .arg("--profile")
+        .arg(profile)
+        .args(pnpm_args)
+        .env("DSH_HOME", home_path);
+
+    // Prepend the pinned pnpm's directory so the CLI's `spawnSync("pnpm")`
+    // picks it up instead of whatever major is on the user's PATH.
+    if let Some(pnpm_dir) = pnpm_prog.parent() {
+        if !pnpm_dir.as_os_str().is_empty() {
+            let existing = std::env::var_os("PATH").unwrap_or_default();
+            let mut entries = vec![pnpm_dir.to_path_buf()];
+            entries.extend(std::env::split_paths(&existing));
+            match std::env::join_paths(entries) {
+                Ok(joined) => {
+                    cmd.env("PATH", joined);
+                }
+                Err(e) => {
+                    crate::log_warn!("拼接 PATH 失败，沿用系统 PATH: {e}");
+                }
+            }
+        }
+    }
+
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    Ok(cmd)
+}
+
+/// Common pnpm flags forwarded through `dsh plugin` (shared store, network
+/// robustness, optional registry mirror). `--prefix` is deliberately absent:
+/// the CLI already runs pnpm with cwd = the profile directory, and passing a
+/// prefix would break that contract.
+fn forwarded_pnpm_flags(state: &State<'_, AppState>, loglevel: &str) -> Vec<String> {
+    let store_dir = state.data_dir.join(".pnpm-store");
+    let mut args: Vec<String> = vec![
+        "--store-dir".to_string(),
+        store_dir.to_string_lossy().to_string(),
+        format!("--loglevel={loglevel}"),
+        "--fetch-timeout".to_string(),
+        "300000".to_string(),
+        "--fetch-retries".to_string(),
+        "5".to_string(),
+        "--fetch-retry-maxtimeout".to_string(),
+        "120000".to_string(),
+        "--network-concurrency".to_string(),
+        "4".to_string(),
+    ];
+    if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
+        let registry = registry.trim().to_string();
+        if !registry.is_empty() {
+            args.push("--registry".to_string());
+            args.push(registry);
+        }
+    }
+    args
 }
 
 /// Pins `auto-install-peers=false` in a profile's `.npmrc`.
@@ -1212,36 +1280,6 @@ async fn ensure_pnpm_for_plugins(
     crate::tasks::ensure_pnpm_pub(app, state, task_id).await
 }
 
-/// Register the plugin in dsh.profile.bundles + dependencies.
-fn register_bundle_in_manifest(
-    dir: &std::path::Path,
-    plugin_id: &str,
-    version: &str,
-) -> Result<(), String> {
-    let mut manifest = read_profile_manifest(dir)?;
-
-    // dependencies[plugin_id] = version
-    if manifest.get("dependencies").is_none() {
-        manifest["dependencies"] = serde_json::json!({});
-    }
-    manifest["dependencies"][plugin_id] = serde_json::Value::String(version.to_string());
-
-    // dsh.profile.bundles += plugin_id
-    if manifest.pointer("/dsh/profile/bundles").is_none() {
-        manifest["dsh"] = serde_json::json!({ "profile": { "bundles": [] } });
-    }
-    let bundles = manifest
-        .pointer_mut("/dsh/profile/bundles")
-        .and_then(|b| b.as_array_mut())
-        .ok_or_else(|| "package.json 缺少 dsh.profile.bundles".to_string())?;
-    let exists = bundles.iter().any(|b| b.as_str() == Some(plugin_id));
-    if !exists {
-        bundles.push(serde_json::Value::String(plugin_id.to_string()));
-    }
-
-    write_profile_manifest(dir, &manifest)
-}
-
 /// Ensure cordis.patch.yml has an insert row for the plugin (non-bundle
 /// plugins need an explicit mount row).
 ///
@@ -1359,25 +1397,6 @@ mod tests {
     }
 
     #[test]
-    fn manifest_register_bundle() {
-        let dir = std::env::temp_dir().join(format!("dsh-plugins-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        // No manifest yet: write one via register.
-        register_bundle_in_manifest(&dir, "@dsh-plugin/dsh-auxiliary", "^0.5.1").unwrap();
-        let m = read_profile_manifest(&dir).unwrap();
-        assert_eq!(m["dependencies"]["@dsh-plugin/dsh-auxiliary"], "^0.5.1");
-        assert_eq!(
-            m["dsh"]["profile"]["bundles"][0],
-            "@dsh-plugin/dsh-auxiliary"
-        );
-        // Register again: no duplicate bundle entry.
-        register_bundle_in_manifest(&dir, "@dsh-plugin/dsh-auxiliary", "^0.5.1").unwrap();
-        let m2 = read_profile_manifest(&dir).unwrap();
-        assert_eq!(m2["dsh"]["profile"]["bundles"].as_array().unwrap().len(), 1);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn ensure_cordis_insert_only_once() {
         let dir = std::env::temp_dir().join(format!("dsh-plugins-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1390,31 +1409,27 @@ mod tests {
     }
 
     #[test]
-    fn is_bundle_plugin_detects_dsh_bundle() {
+    fn manifest_lists_bundle_reads_the_cli_reconciled_layer_list() {
+        // Bundle registration is the CLI's verdict: after `dsh plugin add`
+        // reconciles dsh.profile.bundles, the launcher only reads it back to
+        // decide whether an extra cordis insert row is needed.
         let dir = std::env::temp_dir().join(format!("dsh-plugins-test-{}", uuid::Uuid::new_v4()));
-        let pkg_dir = dir
-            .join("node_modules")
-            .join("@dsh-plugin")
-            .join("dsh-auxiliary");
-        std::fs::create_dir_all(&pkg_dir).unwrap();
-        // No package.json yet -> not a bundle.
-        assert!(!is_bundle_plugin(&dir, "@dsh-plugin/dsh-auxiliary"));
-        // Bundle plugin: dsh.bundle present.
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // No manifest yet: the default has an empty bundle list.
+        assert!(!manifest_lists_bundle(&dir, "@dsh-plugin/dsh-auxiliary").unwrap());
+
+        // Reconciled into the layer stack -> listed.
         std::fs::write(
-            pkg_dir.join("package.json"),
-            r#"{"name":"@dsh-plugin/dsh-auxiliary","version":"0.5.1","dsh":{"bundle":{"patch":"./cordis.patch.yml"}}}"#,
+            dir.join("package.json"),
+            r#"{"private":true,"dependencies":{"@dsh-plugin/dsh-auxiliary":"^0.5.1","@dsh-plugin/plain":"^1.0.0"},"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base","@dsh-plugin/dsh-auxiliary"]}}}"#,
         )
         .unwrap();
-        assert!(is_bundle_plugin(&dir, "@dsh-plugin/dsh-auxiliary"));
-        // Plain package without dsh.bundle -> not a bundle.
-        let plain_dir = dir.join("node_modules").join("@dsh-plugin").join("plain");
-        std::fs::create_dir_all(&plain_dir).unwrap();
-        std::fs::write(
-            plain_dir.join("package.json"),
-            r#"{"name":"@dsh-plugin/plain","version":"1.0.0"}"#,
-        )
-        .unwrap();
-        assert!(!is_bundle_plugin(&dir, "@dsh-plugin/plain"));
+        assert!(manifest_lists_bundle(&dir, "@dsh-plugin/dsh-auxiliary").unwrap());
+        // A dependency the CLI did not reconcile (no dsh.bundle.patch) needs
+        // the explicit insert row instead.
+        assert!(!manifest_lists_bundle(&dir, "@dsh-plugin/plain").unwrap());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 
