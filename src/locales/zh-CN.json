@@ -261,7 +261,9 @@
     "cancel": "取消",
     "remove": "移除",
     "createdInstance": "已创建实例「{name}」",
+    "queuedHint": "同一 Profile 的其他插件操作进行中，排队等待",
     "state": {
+      "queued": "排队中",
       "running": "进行中",
       "done": "已完成",
       "error": "失败",

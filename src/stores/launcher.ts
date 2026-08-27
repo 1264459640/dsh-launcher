@@ -72,10 +72,12 @@ export const useLauncherStore = defineStore('launcher', {
     statusOf: (s) => (id: string): InstanceStatus =>
       s.statusById[id] ?? { id, state: 'stopped', url: null, profile: null, exit_code: null },
     taskList: (s) => Object.values(s.tasks).sort((a, b) => b.created_at - a.created_at),
-    runningTaskCount: (s) => Object.values(s.tasks).filter((t) => t.state === 'running').length,
+    // A queued task is pending work too, so both counts treat it as active.
+    runningTaskCount: (s) =>
+      Object.values(s.tasks).filter((t) => t.state === 'running' || t.state === 'queued').length,
     instanceNameBusy: (s) => (name: string) =>
       Object.values(s.tasks).some(
-        (t) => t.state === 'running' && t.instance_name === name,
+        (t) => (t.state === 'running' || t.state === 'queued') && t.instance_name === name,
       ),
   },
 

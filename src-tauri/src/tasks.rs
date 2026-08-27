@@ -15,6 +15,9 @@ const MAX_LOG_LINES: usize = 1000;
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskState {
+    /// Waiting for a serialized resource (currently: another plugin operation
+    /// on the same profile). Not yet doing any work.
+    Queued,
     Running,
     Done,
     Error,
@@ -187,8 +190,8 @@ pub async fn remove_task(state: State<'_, AppState>, id: String) -> Result<(), S
     let Some(task) = tasks.get(&id) else {
         return Err("任务不存在".to_string());
     };
-    if task.state == TaskState::Running {
-        return Err("任务仍在运行，请先取消".to_string());
+    if task.state == TaskState::Running || task.state == TaskState::Queued {
+        return Err("任务仍在运行或排队中，请先取消".to_string());
     }
     tasks.remove(&id);
     Ok(())

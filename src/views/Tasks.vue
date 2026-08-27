@@ -25,6 +25,8 @@ onMounted(() => {
 
 function stateColor(state: TaskState): string {
   switch (state) {
+    case 'queued':
+      return 'blue'
     case 'running':
       return 'orange'
     case 'done':
@@ -118,6 +120,7 @@ const sortedTasks = computed(() => store.taskList)
             </div>
             <div class="task-meta">
               {{ formatTime(task.created_at) }}
+              <template v-if="task.state === 'queued'"> · {{ t('tasks.queuedHint') }}</template>
               <template v-if="task.state === 'done' && instanceName(task)">
                 · {{ t('tasks.createdInstance', { name: instanceName(task) }) }}
               </template>
@@ -148,7 +151,12 @@ const sortedTasks = computed(() => store.taskList)
             {{ t('tasks.installingHint') }}
           </div>
           <div class="task-actions" @click.stop>
-            <a-button v-if="task.state === 'running'" size="mini" status="warning" @click="onCancel(task.id)">
+            <a-button
+              v-if="task.state === 'running' || task.state === 'queued'"
+              size="mini"
+              status="warning"
+              @click="onCancel(task.id)"
+            >
               {{ t('tasks.cancel') }}
             </a-button>
             <a-button v-else size="mini" status="danger" @click="onRemove(task.id)">

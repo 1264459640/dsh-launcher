@@ -311,7 +311,7 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       const id = String(args?.id)
       const t = mockTasks.get(id)
       if (!t) fail('任务不存在')
-      if (t.state === 'running') fail('任务仍在运行，请先取消')
+      if (t.state === 'running' || t.state === 'queued') fail('任务仍在运行或排队中，请先取消')
       mockTasks.delete(id)
       return undefined as T
     }

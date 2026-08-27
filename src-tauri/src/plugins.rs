@@ -925,20 +925,29 @@ async fn do_install_plugin(
     //    parallel installs into one profile clobber each other and only the
     //    last plugin survives. Queue instead.
     let lock = profile_lock(state, &dir).await;
-    if lock.try_lock().is_err() {
-        crate::tasks::push_task_log_pub(
-            app,
-            state,
-            task_id,
-            "该 profile 正在执行其他插件操作，排队等待…",
-        )
-        .await;
-    }
-    let _guard = lock.lock().await;
+    let guard = match lock.try_lock() {
+        Ok(g) => g,
+        Err(_) => {
+            // Queued behind another operation on this profile: reflect that in
+            // the task state so the UI shows the queue depth instead of a row
+            // of "running" tasks that are actually waiting.
+            set_task_queued(app, state, task_id).await;
+            crate::tasks::push_task_log_pub(
+                app,
+                state,
+                task_id,
+                "该 profile 正在执行其他插件操作，排队等待…",
+            )
+            .await;
+            lock.lock().await
+        }
+    };
+    let _guard = guard;
     // Cancelled while queued: stop before touching the profile.
     if task_cancelled(state, task_id).await {
         return Err("已取消".to_string());
     }
+    set_task_running(app, state, task_id).await;
 
     // 1. `dsh plugin add <spec>` through the instance's own CLI: it installs
     //    into the profile dir and reconciles dsh.profile.bundles itself, so the
@@ -1020,6 +1029,40 @@ async fn profile_lock(
     let key = profile_lock_key(profile_dir);
     let mut locks = state.profile_locks.lock().await;
     locks.entry(key).or_default().clone()
+}
+
+/// Marks the task as waiting in the profile queue (no work started yet).
+async fn set_task_queued(app: &AppHandle, state: &State<'_, AppState>, task_id: &str) {
+    let mut tasks = state.tasks.lock().await;
+    if let Some(task) = tasks.get_mut(task_id) {
+        if task.state == crate::tasks::TaskState::Cancelled {
+            return;
+        }
+        task.state = crate::tasks::TaskState::Queued;
+        task.percent = 0;
+    }
+    drop(tasks);
+    crate::tasks::emit_progress_pub(app, task_id, crate::tasks::TaskState::Queued, 0, None, None);
+}
+
+/// Promotes a queued task to running once it owns the profile lock.
+async fn set_task_running(app: &AppHandle, state: &State<'_, AppState>, task_id: &str) {
+    let mut tasks = state.tasks.lock().await;
+    if let Some(task) = tasks.get_mut(task_id) {
+        if task.state == crate::tasks::TaskState::Cancelled {
+            return;
+        }
+        task.state = crate::tasks::TaskState::Running;
+    }
+    drop(tasks);
+    crate::tasks::emit_progress_pub(
+        app,
+        task_id,
+        crate::tasks::TaskState::Running,
+        0,
+        None,
+        None,
+    );
 }
 
 /// Whether the task was cancelled while it waited in the queue.

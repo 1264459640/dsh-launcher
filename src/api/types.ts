@@ -87,7 +87,8 @@ export interface RuntimeStatus {
   pnpm: ToolStatus
 }
 
-export type TaskState = 'running' | 'done' | 'error' | 'cancelled'
+/** `queued`: waiting for another operation on the same profile to finish. */
+export type TaskState = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
 export interface TaskInfo {
   id: string
