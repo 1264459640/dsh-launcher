@@ -8,15 +8,15 @@ use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 pub const STATUS_EVENT: &str = "instance://status";
 
 /// A live instance process.
 pub struct RunningInstance {
-    /// Child handle shared with the waiter task. `None` once the process was
-    /// taken for waiting/killing.
-    pub child: Arc<Mutex<Option<tokio::process::Child>>>,
+    /// Stop signal. The waiter task owns the child and `select!`s on this, so
+    /// `stop_instance_process` never touches the child handle directly.
+    pub kill: Arc<Notify>,
     pub profile: String,
     pub url: Option<String>,
 }
@@ -258,7 +258,7 @@ pub async fn start_instance_process(
             }),
     ));
 
-    let shared_child: Arc<Mutex<Option<tokio::process::Child>>> = Arc::new(Mutex::new(Some(child)));
+    let kill_switch = Arc::new(Notify::new());
 
     emit_status(
         app,
@@ -275,33 +275,42 @@ pub async fn start_instance_process(
     state.running.lock().await.insert(
         instance_id.to_string(),
         RunningInstance {
-            child: shared_child.clone(),
+            kill: kill_switch.clone(),
             profile: profile.to_string(),
             url: None,
         },
     );
     crate::tray::rebuild_tray_menu(app).await;
 
-    // Waiter: awaits process exit, then cleans up and notifies.
+    // Waiter: owns the child, awaits exit or a kill request, then cleans up
+    // and notifies. It is the single place that removes the map entry and
+    // emits the terminal status, so state transitions never diverge.
     {
-        let waiter_child = shared_child.clone();
         let waiter_app = app.clone();
         let waiter_id = instance_id.to_string();
         let waiter_profile = profile.to_string();
+        let waiter_kill = kill_switch.clone();
+        let mut child = child;
         tauri::async_runtime::spawn(async move {
             let state = waiter_app.state::<AppState>();
-            let taken = waiter_child.lock().await.take();
-            let code = if let Some(mut c) = taken {
-                c.wait().await.ok().and_then(|s| s.code())
-            } else {
-                None
+            let (code, stopped) = tokio::select! {
+                status = child.wait() => (status.ok().and_then(|s| s.code()), false),
+                _ = waiter_kill.notified() => {
+                    let _ = child.kill().await;
+                    let code = child.wait().await.ok().and_then(|s| s.code());
+                    (code, true)
+                }
             };
             state.running.lock().await.remove(&waiter_id);
             emit_status(
                 &waiter_app,
                 &InstanceStatus {
                     id: waiter_id.clone(),
-                    state: InstanceState::Exited,
+                    state: if stopped {
+                        InstanceState::Stopped
+                    } else {
+                        InstanceState::Exited
+                    },
                     url: None,
                     profile: Some(waiter_profile),
                     exit_code: code,
@@ -360,50 +369,53 @@ pub async fn start_instance_process(
     Ok(())
 }
 
-/// Stops a running instance: kills the child and emits the terminal event.
+/// Stops a running instance: signals the waiter task to kill the child and
+/// waits for it to reap the process and remove the registry entry. The stop
+/// is idempotent: when the entry is already gone (crashed, stopped from the
+/// tray, duplicate click) a terminal status is re-emitted so a stale
+/// frontend converges instead of erroring with "实例未在运行".
 pub async fn stop_instance_process(
     app: &AppHandle,
     state: &State<'_, AppState>,
     instance_id: &str,
 ) -> Result<(), String> {
-    let entry = state
+    let kill = state
         .running
         .lock()
         .await
         .get(instance_id)
-        .map(|r| r.child.clone());
-    let Some(child) = entry else {
-        return Err("实例未在运行".to_string());
+        .map(|r| r.kill.clone());
+    let Some(kill) = kill else {
+        emit_status(
+            app,
+            &InstanceStatus {
+                id: instance_id.to_string(),
+                state: InstanceState::Stopped,
+                url: None,
+                profile: None,
+                exit_code: None,
+            },
+        );
+        return Ok(());
     };
-    let taken = child.lock().await.take();
-    if let Some(mut c) = taken {
-        let _ = c.kill().await;
-        let _ = c.wait().await;
+    kill.notify_one();
+    // Wait for the waiter task to finish cleanup so callers (e.g. the restart
+    // flow) observe a clean registry on return.
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if !state.running.lock().await.contains_key(instance_id) {
+            return Ok(());
+        }
     }
-    state.running.lock().await.remove(instance_id);
-    emit_status(
-        app,
-        &InstanceStatus {
-            id: instance_id.to_string(),
-            state: InstanceState::Stopped,
-            url: None,
-            profile: None,
-            exit_code: Some(0),
-        },
-    );
-    crate::tray::rebuild_tray_menu(app).await;
-    crate::windows::close_instance_window(app, instance_id);
-    Ok(())
+    Err("停止实例超时（进程未响应终止信号）".to_string())
 }
 
-/// Kills every running instance (called on launcher exit). Best-effort.
+/// Kills every running instance (called on launcher exit). Best-effort: the
+/// waiter tasks reap the children asynchronously as the runtime shuts down.
 pub fn kill_all(state: &AppState) {
     let running = state.running.blocking_lock();
     for entry in running.values() {
-        let taken = entry.child.blocking_lock().take();
-        if let Some(mut c) = taken {
-            let _ = c.start_kill();
-        }
+        entry.kill.notify_one();
     }
 }
 

@@ -80,6 +80,25 @@ export const useLauncherStore = defineStore('launcher', {
 
   actions: {
     async init() {
+      // Attach the status listener BEFORE the initial snapshot fetch, and
+      // buffer events until the snapshot is applied. Otherwise an exit event
+      // fired between fetch and listener attach is lost, leaving the UI
+      // showing "running" for a process the backend already forgot (stop then
+      // reported "实例未在运行").
+      const pending: InstanceStatus[] = []
+      let live = false
+      const applyStatus = (st: InstanceStatus) => {
+        if (st.state === 'stopped' || st.state === 'exited') {
+          delete this.statusById[st.id]
+        } else {
+          this.statusById[st.id] = st
+        }
+      }
+      await api.onInstanceStatus((st) => {
+        if (live) applyStatus(st)
+        else pending.push(st)
+      })
+
       const [homes, versions, instances, settings, statuses, tasks, runtime] = await Promise.all([
         api.listHomes(),
         api.listVersions(),
@@ -97,14 +116,8 @@ export const useLauncherStore = defineStore('launcher', {
       this.tasks = Object.fromEntries(tasks.map((t) => [t.id, t]))
       this.runtime = runtime
       this.loaded = true
-
-      await api.onInstanceStatus((st) => {
-        if (st.state === 'stopped' || st.state === 'exited') {
-          delete this.statusById[st.id]
-        } else {
-          this.statusById[st.id] = st
-        }
-      })
+      live = true
+      pending.forEach(applyStatus)
 
       await api.onTaskProgress((p) => {
         const existing = this.tasks[p.id]
