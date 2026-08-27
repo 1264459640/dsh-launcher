@@ -28,8 +28,10 @@ if [[ "$REF_TYPE" == "tag" ]]; then
     || { echo "error: tag ${TAG} does not match manifest version ${MANIFEST_VERSION}" >&2; exit 1; }
   case "$VERSION" in *-*) PRERELEASE="true";; *) PRERELEASE="false";; esac
 else
-  VERSION="$MANIFEST_VERSION"
-  TAG="v${VERSION}-dev.${RUN_NUMBER}"
+  # Dev builds stamp the full prerelease version (base + run number) into the
+  # packaged app so artifacts are distinguishable in-app.
+  VERSION="${MANIFEST_VERSION}-dev.${RUN_NUMBER}"
+  TAG="v${VERSION}"
   PRERELEASE="true"
 fi
 

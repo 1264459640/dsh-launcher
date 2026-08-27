@@ -146,6 +146,11 @@ jobs:
           key: ${{ matrix.cache_key }}-release
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
+      - name: Stamp build version
+        # Writes the resolved version (v<ver>-dev.<run> for branch builds,
+        # the tag version for releases) into package.json / tauri.conf.json /
+        # Cargo.toml / Cargo.lock so the packaged app reports it.
+        run: node ci/set-version.mjs "${{ needs.prepare.outputs.version }}"
       - name: Package and upload
         uses: tauri-apps/tauri-action@v0
         env:
