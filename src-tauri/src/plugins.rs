@@ -608,6 +608,11 @@ pub async fn uninstall_plugin(
         return Err(format!("Profile「{}」不存在", input.profile));
     }
 
+    // 0. Same profile serialization as installs: a removal also rewrites the
+    //    manifest, so it must not race an install into the same profile.
+    let lock = profile_lock(&state, &dir).await;
+    let _guard = lock.lock().await;
+
     // 1. `dsh plugin remove <id>` through the instance's own CLI: it removes
     //    the dependency and reconciles dsh.profile.bundles (a name that is no
     //    longer an installed bundle leaves the layer stack), so the manifest is
@@ -914,6 +919,27 @@ async fn do_install_plugin(
     )
     .await;
 
+    // 0. Serialize against this profile: `dsh plugin` is a read-modify-write
+    //    cycle over the profile's package.json (pnpm writes dependencies, then
+    //    the CLI reconciles dsh.profile.bundles from the installed state), so
+    //    parallel installs into one profile clobber each other and only the
+    //    last plugin survives. Queue instead.
+    let lock = profile_lock(state, &dir).await;
+    if lock.try_lock().is_err() {
+        crate::tasks::push_task_log_pub(
+            app,
+            state,
+            task_id,
+            "该 profile 正在执行其他插件操作，排队等待…",
+        )
+        .await;
+    }
+    let _guard = lock.lock().await;
+    // Cancelled while queued: stop before touching the profile.
+    if task_cancelled(state, task_id).await {
+        return Err("已取消".to_string());
+    }
+
     // 1. `dsh plugin add <spec>` through the instance's own CLI: it installs
     //    into the profile dir and reconciles dsh.profile.bundles itself, so the
     //    launcher neither drives pnpm nor guesses the layer list.
@@ -972,6 +998,39 @@ fn manifest_lists_bundle(profile_dir: &std::path::Path, plugin_id: &str) -> Resu
         .and_then(|b| b.as_array())
         .map(|arr| arr.iter().any(|b| b.as_str() == Some(plugin_id)))
         .unwrap_or(false))
+}
+
+/// Lock key for a profile directory. Windows filesystems are
+/// case-insensitive, so the key is lowercased there: two instances that share
+/// a DSH_HOME must contend for the same lock.
+fn profile_lock_key(profile_dir: &std::path::Path) -> String {
+    let raw = profile_dir.to_string_lossy().to_string();
+    if cfg!(windows) {
+        raw.to_lowercase()
+    } else {
+        raw
+    }
+}
+
+/// The mutex guarding one profile directory, created on first use.
+async fn profile_lock(
+    state: &State<'_, AppState>,
+    profile_dir: &std::path::Path,
+) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let key = profile_lock_key(profile_dir);
+    let mut locks = state.profile_locks.lock().await;
+    locks.entry(key).or_default().clone()
+}
+
+/// Whether the task was cancelled while it waited in the queue.
+async fn task_cancelled(state: &State<'_, AppState>, task_id: &str) -> bool {
+    state
+        .tasks
+        .lock()
+        .await
+        .get(task_id)
+        .map(|t| t.state == crate::tasks::TaskState::Cancelled)
+        .unwrap_or(false)
 }
 
 /// Which instance/profile a `dsh plugin` invocation targets.
@@ -1394,6 +1453,22 @@ mod tests {
         assert!(set.contains("live-stats"));
         assert!(!set.contains("keep"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn profile_lock_key_matches_paths_that_denote_one_profile() {
+        // Two instances sharing a DSH_HOME must contend for the same lock, so
+        // the key normalizes case on Windows (case-insensitive filesystem).
+        let a = std::path::Path::new("C:\\homes\\lab\\profiles\\web");
+        let b = std::path::Path::new("C:\\Homes\\Lab\\Profiles\\Web");
+        if cfg!(windows) {
+            assert_eq!(profile_lock_key(a), profile_lock_key(b));
+        } else {
+            assert_ne!(profile_lock_key(a), profile_lock_key(b));
+        }
+        // Different profiles under one HOME never share a lock.
+        let other = std::path::Path::new("C:\\homes\\lab\\profiles\\tui");
+        assert_ne!(profile_lock_key(a), profile_lock_key(other));
     }
 
     #[test]

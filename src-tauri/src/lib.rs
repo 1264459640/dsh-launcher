@@ -20,6 +20,12 @@ pub struct AppState {
     pub config: StdMutex<config::Config>,
     pub running: tokio::sync::Mutex<HashMap<String, process::RunningInstance>>,
     pub tasks: tokio::sync::Mutex<HashMap<String, tasks::TaskInfo>>,
+    /// One mutex per profile directory, serializing plugin installs and
+    /// removals against that profile. `dsh plugin` (pnpm + the bundle
+    /// reconcile) is a read-modify-write cycle over the profile's
+    /// package.json, so concurrent runs against one profile overwrite each
+    /// other and only the last plugin survives.
+    pub profile_locks: tokio::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     /// Instance whose webview window was opened/focused most recently.
     pub last_focused_instance: StdMutex<Option<String>>,
 }
@@ -57,6 +63,7 @@ pub fn run() {
                 config: StdMutex::new(cfg),
                 running: tokio::sync::Mutex::new(HashMap::new()),
                 tasks: tokio::sync::Mutex::new(HashMap::new()),
+                profile_locks: tokio::sync::Mutex::new(HashMap::new()),
                 last_focused_instance: StdMutex::new(None),
             });
 
