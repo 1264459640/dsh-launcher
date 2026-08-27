@@ -607,25 +607,58 @@ fn task_log_mentions_ignored_builds(state: &State<'_, AppState>, task_id: &str) 
         .unwrap_or(false)
 }
 
-/// Returns a usable pnpm executable. Prefers the system pnpm; falls back to
-/// a pnpm bootstrapped into the launcher data dir (`tools/`). If neither
-/// exists it installs the latest pnpm there via npm and returns its path.
+/// DSH profiles are initialized by pnpm 11, and `dsh plugin` shells out to
+/// whatever pnpm is on PATH. A different pnpm major produces trees the CLI
+/// does not expect and fails in ways that look unrelated, so the launcher
+/// pins the major it drives every install with.
+pub(crate) const REQUIRED_PNPM_MAJOR: u32 = 11;
+
+/// Parses the major version out of `pnpm --version` output ("11.17.0\n").
+fn pnpm_major(version_output: &str) -> Option<u32> {
+    version_output
+        .trim()
+        .split('.')
+        .next()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
+/// Returns a pnpm executable whose major version is [`REQUIRED_PNPM_MAJOR`].
+/// Prefers the system pnpm when its major matches; otherwise falls back to a
+/// pinned pnpm bootstrapped into the launcher data dir (`tools/`), installing
+/// or reinstalling it when missing or on the wrong major.
 async fn ensure_pnpm(
     app: &AppHandle,
     state: &State<'_, AppState>,
     task_id: &str,
 ) -> Result<std::path::PathBuf, String> {
-    // 1. System pnpm available?
+    // 1. System pnpm available AND on the required major?
     let mut sys_cmd = tokio::process::Command::new(crate::process::pnpm());
     crate::process::hide_console(&mut sys_cmd);
     let sys = sys_cmd.arg("--version").output().await;
     if let Ok(out) = sys {
         if out.status.success() {
-            return Ok(std::path::PathBuf::from(crate::process::pnpm()));
+            let raw = String::from_utf8_lossy(&out.stdout).to_string();
+            match pnpm_major(&raw) {
+                Some(REQUIRED_PNPM_MAJOR) => {
+                    return Ok(std::path::PathBuf::from(crate::process::pnpm()))
+                }
+                other => {
+                    let shown = raw.trim().to_string();
+                    crate::log_warn!(
+                        "系统 pnpm 版本为 {shown}（主版本 {other:?}），DSH profile 需要 pnpm {REQUIRED_PNPM_MAJOR}，改用启动器内置 pnpm"
+                    );
+                    let msg = format!(
+                        "系统 pnpm {shown} 与所需的 pnpm {REQUIRED_PNPM_MAJOR} 不符，使用启动器内置 pnpm"
+                    );
+                    push_task_log(app, state, task_id, &msg).await;
+                }
+            }
         }
     }
 
-    // 2. Local pnpm already bootstrapped?
+    // 2. Local pnpm already bootstrapped on the required major?
     let tools_dir = state.data_dir.join("tools");
     let local = local_pnpm_path(&tools_dir);
     if local.exists() {
@@ -633,30 +666,34 @@ async fn ensure_pnpm(
         crate::process::hide_console(&mut probe_cmd);
         let probe = probe_cmd.arg("--version").output().await;
         if let Ok(out) = probe {
-            if out.status.success() {
+            if out.status.success()
+                && pnpm_major(&String::from_utf8_lossy(&out.stdout)) == Some(REQUIRED_PNPM_MAJOR)
+            {
                 return Ok(local);
             }
         }
     }
 
-    // 3. Bootstrap the latest pnpm inside the data dir via npm.
+    // 3. Bootstrap the pinned pnpm major inside the data dir via npm.
     std::fs::create_dir_all(&tools_dir).map_err(|e| format!("创建工具目录失败: {e}"))?;
-    let msg = "检测到未安装 pnpm，正在安装最新版…";
+    let spec = format!("pnpm@{REQUIRED_PNPM_MAJOR}");
+    let msg = format!("正在安装 DSH profile 所需的 {spec}…");
     {
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(task_id) {
             task.percent = 5;
-            push_log_locked(task, msg);
+            push_log_locked(task, &msg);
         }
     }
     emit_progress(app, task_id, TaskState::Running, 5, None, None);
-    emit_log(app, task_id, msg);
+    emit_log(app, task_id, &msg);
+    crate::log_info!("引导安装 {spec} 到 {}", tools_dir.display());
 
     let child = crate::process::hide_console(
         tokio::process::Command::new(crate::process::npm())
             .args(["install", "--global", "--prefix"])
             .arg(&tools_dir)
-            .args(["pnpm@latest"])
+            .arg(&spec)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped()),
     )
@@ -959,4 +996,25 @@ pub(crate) async fn run_streamed_command(
         return Err(format!("{what} 失败: {last}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pnpm_major_parses_version_output() {
+        assert_eq!(pnpm_major("11.17.0\n"), Some(11));
+        assert_eq!(pnpm_major("  10.4.1  "), Some(10));
+        assert_eq!(pnpm_major("12.0.0-beta.1"), Some(12));
+        assert_eq!(pnpm_major(""), None);
+        assert_eq!(pnpm_major("not-a-version"), None);
+    }
+
+    #[test]
+    fn required_pnpm_major_is_the_profile_toolchain() {
+        // DSH profiles are initialized by pnpm 11; changing this constant
+        // means the launcher drives installs with a different major.
+        assert_eq!(REQUIRED_PNPM_MAJOR, 11);
+    }
 }
