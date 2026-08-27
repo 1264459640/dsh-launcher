@@ -588,6 +588,7 @@ pub async fn set_plugins_enabled(
 
 /// Input for uninstalling a plugin from a profile.
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UninstallPluginInput {
     pub instance_id: String,
     pub profile: String,
