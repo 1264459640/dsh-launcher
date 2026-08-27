@@ -577,6 +577,50 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
 // Instance runtime
 // ---------------------------------------------------------------------------
 
+/// Resolves (home path, version dir, version string) for an instance.
+fn resolve_instance_paths(
+    state: &State<'_, AppState>,
+    instance_id: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf, String), String> {
+    let cfg = state.config.lock().unwrap();
+    let inst = cfg
+        .instances
+        .iter()
+        .find(|i| i.id == instance_id)
+        .ok_or_else(|| "实例不存在".to_string())?;
+    let home = cfg
+        .homes
+        .iter()
+        .find(|h| h.id == inst.home_id)
+        .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+    let version = cfg
+        .versions
+        .iter()
+        .find(|v| v.id == inst.version_id)
+        .ok_or_else(|| "版本不存在".to_string())?;
+    Ok((
+        home.path.clone(),
+        version.dir.clone(),
+        version.version.clone(),
+    ))
+}
+
+/// Dependency-tree preflight for an instance + profile. Advisory only: the
+/// report never blocks a launch, it is logged and handed to the UI.
+#[tauri::command(rename_all = "snake_case")]
+pub fn check_instance_health(
+    state: State<'_, AppState>,
+    instance_id: String,
+    profile: String,
+) -> Result<crate::doctor::DoctorReport, String> {
+    let (home_path, version_dir, version) = resolve_instance_paths(&state, &instance_id)?;
+    let profile_dir = home_path.join("profiles").join(&profile);
+    let report =
+        crate::doctor::inspect(&instance_id, &profile, &version_dir, &version, &profile_dir);
+    crate::doctor::log_report(&report);
+    Ok(report)
+}
+
 #[tauri::command]
 pub async fn start_instance(
     app: AppHandle,
@@ -584,6 +628,25 @@ pub async fn start_instance(
     id: String,
     profile: String,
 ) -> Result<(), String> {
+    // Preflight the dependency tree before spawning: a duplicated core copy
+    // in the profile breaks every tool call at runtime with no load-time
+    // error, so it is reported up front instead of being debugged later.
+    // Findings never block the launch.
+    if let Ok((home_path, version_dir, version)) = resolve_instance_paths(&state, &id) {
+        let report = crate::doctor::inspect(
+            &id,
+            &profile,
+            &version_dir,
+            &version,
+            &home_path.join("profiles").join(&profile),
+        );
+        crate::doctor::log_report(&report);
+        if !report.findings.is_empty() {
+            use tauri::Emitter;
+            let _ = app.emit(crate::doctor::HEALTH_EVENT, &report);
+        }
+    }
+
     process::start_instance_process(&app, &state, &id, &profile).await?;
     // Remember the last used profile.
     let mut cfg = state.config.lock().unwrap();

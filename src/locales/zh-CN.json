@@ -31,6 +31,11 @@
     },
     "started": "实例启动命令已发送",
     "stopped": "实例已停止",
+    "health": {
+      "prefix": "依赖自检：",
+      "warnTitle": "依赖树提示",
+      "errorTitle": "依赖树异常"
+    },
     "noProfile": "该实例的 DSH_HOME 下没有可用 Profile"
   },
   "instances": {

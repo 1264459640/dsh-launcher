@@ -38,6 +38,23 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 /** Runtime log level written to <data_dir>/logs/latest.log. */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
+/** Severity of a dependency-tree preflight finding. */
+export type FindingLevel = 'warn' | 'error'
+
+export interface DoctorFinding {
+  level: FindingLevel
+  /** core-version-mismatch | core-missing | profile-core-copy | profile-core-mixed */
+  code: string
+  message: string
+}
+
+/** Dependency-tree preflight result for an instance + profile (advisory). */
+export interface DoctorReport {
+  instance_id: string
+  profile: string
+  findings: DoctorFinding[]
+}
+
 /** Result of checking GitHub for a newer launcher release. */
 export interface LauncherUpdateInfo {
   current: string

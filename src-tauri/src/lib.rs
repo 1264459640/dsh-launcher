@@ -1,6 +1,7 @@
 mod applog;
 mod commands;
 mod config;
+mod doctor;
 mod plugins;
 mod process;
 mod runtime;
@@ -110,6 +111,7 @@ pub fn run() {
             commands::delete_profile,
             commands::start_instance,
             commands::stop_instance,
+            commands::check_instance_health,
             commands::list_instance_status,
             commands::open_instance_window,
             commands::get_settings,

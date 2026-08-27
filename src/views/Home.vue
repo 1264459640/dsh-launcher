@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Message } from '@arco-design/web-vue'
+import { Message, Notification } from '@arco-design/web-vue'
 import { Marked } from 'marked'
 import markedAlert from 'marked-alert'
 import markedFootnote from 'marked-footnote'
@@ -239,8 +239,25 @@ async function onStart() {
   try {
     await api.startInstance(selectedInstanceId.value, selectedProfile.value)
     Message.success(t('home.started'))
+    // Dependency-tree preflight: advisory only, never blocks the launch. A
+    // duplicated core copy in the profile silently breaks every tool call at
+    // runtime, so surface it here instead of leaving users to dig through logs.
+    void reportHealth(selectedInstanceId.value, selectedProfile.value)
   } catch (e) {
     Message.error(String(e))
+  }
+}
+
+async function reportHealth(instanceId: string, profile: string) {
+  try {
+    const report = await api.checkInstanceHealth(instanceId, profile)
+    for (const f of report.findings.slice(0, 3)) {
+      const content = `${t('home.health.prefix')}${f.message}`
+      if (f.level === 'error') Notification.error({ title: t('home.health.errorTitle'), content, duration: 0, closable: true })
+      else Notification.warning({ title: t('home.health.warnTitle'), content, duration: 8000, closable: true })
+    }
+  } catch {
+    // A failed preflight must never affect the launch.
   }
 }
 

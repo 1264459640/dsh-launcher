@@ -31,6 +31,11 @@
     },
     "started": "Start command sent",
     "stopped": "Instance stopped",
+    "health": {
+      "prefix": "Dependency check: ",
+      "warnTitle": "Dependency tree notice",
+      "errorTitle": "Dependency tree fault"
+    },
     "noProfile": "No profile available under this instance's DSH_HOME"
   },
   "instances": {

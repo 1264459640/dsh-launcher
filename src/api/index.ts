@@ -4,6 +4,7 @@
 
 import type {
   CopyInstanceInput,
+  DoctorReport,
   DshHome,
   DshInstance,
   DshVersion,
@@ -523,6 +524,13 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
     }
     case 'list_instance_status':
       return Object.values(db.running) as T
+    case 'check_instance_health':
+      // Browser preview has no real dependency tree: report healthy.
+      return {
+        instance_id: String(args?.instance_id ?? ''),
+        profile: String(args?.profile ?? ''),
+        findings: [],
+      } as T
     case 'get_settings':
       return db.settings as T
     case 'fetch_news': {
@@ -712,6 +720,8 @@ export const api = {
     call<void>('delete_profile', { home_id: homeId, name }),
 
   startInstance: (id: string, profile: string) => call<void>('start_instance', { id, profile }),
+  checkInstanceHealth: (instanceId: string, profile: string) =>
+    call<DoctorReport>('check_instance_health', { instance_id: instanceId, profile }),
   stopInstance: (id: string) => call<void>('stop_instance', { id }),
   openInstanceWindow: (id: string) => call<void>('open_instance_window', { id }),
   listInstanceStatus: () => call<InstanceStatus[]>('list_instance_status'),
