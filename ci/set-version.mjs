@@ -29,7 +29,8 @@ if (tomlUpdated === toml) {
 writeFileSync(tomlPath, tomlUpdated)
 
 // Cargo.lock: update only this crate's [[package]] entry so `--locked`
-// builds keep working after the stamp.
+// builds keep working after the stamp. Windows checkouts may use CRLF line
+// endings, so the pattern tolerates \r\n and preserves it via $1.
 const pkgName = toml.match(/^name = "([^"]+)"/m)?.[1]
 if (!pkgName) {
   console.error(`${tomlPath}: package name not found`)
@@ -37,7 +38,7 @@ if (!pkgName) {
 }
 const lockPath = 'src-tauri/Cargo.lock'
 const lock = readFileSync(lockPath, 'utf8')
-const blockRe = new RegExp(`(\\[\\[package\\]\\]\\nname = "${pkgName}"\\nversion = ")[^"]+"`)
+const blockRe = new RegExp(`(\\[\\[package\\]\\]\\r?\\nname = "${pkgName}"\\r?\\nversion = ")[^"]+"`)
 if (!blockRe.test(lock)) {
   console.error(`${lockPath}: workspace package entry not found`)
   process.exit(1)
