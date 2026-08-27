@@ -6,6 +6,7 @@ mod process;
 mod runtime;
 mod tasks;
 mod tray;
+mod update;
 mod windows;
 
 use std::collections::HashMap;
@@ -114,6 +115,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::fetch_news,
+            update::check_launcher_update,
             plugins::fetch_plugin_market,
             plugins::fetch_plugin_versions,
             plugins::list_installed_plugins,

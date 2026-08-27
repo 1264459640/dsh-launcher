@@ -164,7 +164,15 @@
     "homeInUse": "该 DSH_HOME 仍被实例引用，无法删除",
     "browserPickHint": "浏览器预览模式不支持系统目录选择，请手动输入路径",
     "instances": "实例管理提示",
-    "instancesHint": "实例的创建与编辑在主页进行。"
+    "instancesHint": "实例的创建与编辑在主页进行。",
+    "update": {
+      "title": "启动器更新",
+      "check": "检查更新",
+      "devChannel": "dev 渠道",
+      "available": "发现新版本 v{version}",
+      "viewRelease": "前往下载",
+      "upToDate": "当前已是最新版本"
+    }
   },
   "instanceEdit": {
     "titleNew": "新建实例",

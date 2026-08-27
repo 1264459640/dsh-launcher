@@ -38,6 +38,17 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 /** Runtime log level written to <data_dir>/logs/latest.log. */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
+/** Result of checking GitHub for a newer launcher release. */
+export interface LauncherUpdateInfo {
+  current: string
+  /** "dev" for -dev.N builds, otherwise "stable". */
+  channel: 'dev' | 'stable'
+  up_to_date: boolean
+  latest: string | null
+  url: string | null
+  published_at: string | null
+}
+
 export type InstanceState = 'stopped' | 'starting' | 'running' | 'exited'
 
 export interface InstanceStatus {

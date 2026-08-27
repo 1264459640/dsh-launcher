@@ -11,6 +11,7 @@ import type {
   InstalledPlugin,
   InstanceStatus,
   LauncherSettings,
+  LauncherUpdateInfo,
   MarketPlugin,
   NewInstanceInput,
   PluginChannel,
@@ -542,6 +543,15 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       saveDb(db)
       return db.settings as T
     }
+    case 'check_launcher_update':
+      return {
+        current: '0.2.0-dev.1',
+        channel: 'dev',
+        up_to_date: false,
+        latest: '0.2.0-dev.2',
+        url: 'https://github.com/dsh-plugins/dsh-launcher/releases',
+        published_at: new Date().toISOString(),
+      } as T
     // ---- Plugin marketplace mocks (browser preview) ----
     case 'fetch_plugin_market': {
       const q = ((args?.query as string) ?? '').trim().toLowerCase()
@@ -709,6 +719,16 @@ export const api = {
   getSettings: () => call<LauncherSettings>('get_settings'),
   updateSettings: (settings: Partial<LauncherSettings>) => call<LauncherSettings>('update_settings', { settings }),
   fetchNews: (source: string) => call<string>('fetch_news', { source }),
+
+  checkLauncherUpdate: () => call<LauncherUpdateInfo>('check_launcher_update'),
+  /** The running launcher's own version (stamped at build time by CI). */
+  async getLauncherVersion(): Promise<string> {
+    if (isTauri) {
+      const { getVersion } = await import('@tauri-apps/api/app')
+      return getVersion()
+    }
+    return '0.2.0-dev.1'
+  },
 
   // Plugin marketplace
   fetchPluginMarket: (query?: string) => call<MarketPlugin[]>('fetch_plugin_market', { query: query ?? null }),

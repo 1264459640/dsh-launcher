@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
-import type { LogLevel, ThemeMode } from '@/api/types'
+import type { LauncherUpdateInfo, LogLevel, ThemeMode } from '@/api/types'
 import { SUPPORTED_LOCALES } from '@/i18n'
 import { useLauncherStore } from '@/stores/launcher'
 
@@ -40,6 +40,32 @@ async function onThemeChange(value: string | number | boolean | Record<string, u
 
 async function onLogLevelChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
   await patchSettings({ log_level: String(value) as LogLevel })
+}
+
+// --- Launcher update check (GitHub releases) --------------------------------
+
+const launcherVersion = ref('')
+const checkingUpdate = ref(false)
+const updateInfo = ref<LauncherUpdateInfo | null>(null)
+
+onMounted(async () => {
+  try {
+    launcherVersion.value = await api.getLauncherVersion()
+  } catch {
+    launcherVersion.value = '?'
+  }
+})
+
+async function onCheckUpdate() {
+  checkingUpdate.value = true
+  try {
+    updateInfo.value = await api.checkLauncherUpdate()
+    if (updateInfo.value.up_to_date) Message.success(t('settings.update.upToDate'))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    checkingUpdate.value = false
+  }
 }
 
 async function onLocaleChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
@@ -180,6 +206,34 @@ const homeColumns = computed(() => [
 
     <div class="dl-card">
       <div class="dl-card-title">
+        <h3>{{ t('settings.update.title') }}</h3>
+      </div>
+      <div class="update-row">
+        <span class="update-current">v{{ launcherVersion }}</span>
+        <a-tag v-if="updateInfo?.channel === 'dev' || launcherVersion.includes('-dev.')" color="orange" size="small">
+          {{ t('settings.update.devChannel') }}
+        </a-tag>
+        <a-button size="small" :loading="checkingUpdate" @click="onCheckUpdate">
+          {{ t('settings.update.check') }}
+        </a-button>
+      </div>
+      <div v-if="updateInfo && !updateInfo.up_to_date" class="update-result">
+        <a-alert type="info" :show-icon="true">
+          {{ t('settings.update.available', { version: updateInfo.latest }) }}
+          <template v-if="updateInfo.url">
+            <a :href="updateInfo.url" target="_blank" rel="noopener noreferrer" class="update-link">
+              {{ t('settings.update.viewRelease') }}
+            </a>
+          </template>
+        </a-alert>
+      </div>
+      <div v-else-if="updateInfo?.up_to_date" class="update-result">
+        <span class="update-up-to-date">{{ t('settings.update.upToDate') }}</span>
+      </div>
+    </div>
+
+    <div class="dl-card">
+      <div class="dl-card-title">
         <h3>{{ t('settings.homes') }}</h3>
       </div>
 
@@ -230,5 +284,29 @@ const homeColumns = computed(() => [
 
 .home-path-input {
   flex: 1;
+}
+
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.update-current {
+  font-weight: 600;
+}
+
+.update-result {
+  margin-top: 8px;
+}
+
+.update-link {
+  margin-left: 8px;
+}
+
+.update-up-to-date {
+  color: var(--color-text-3);
+  font-size: 13px;
 }
 </style>

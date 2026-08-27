@@ -164,7 +164,15 @@
     "homeInUse": "This DSH_HOME is still referenced by an instance and cannot be removed",
     "browserPickHint": "Directory picking is unavailable in browser preview; type the path manually",
     "instances": "Instance management",
-    "instancesHint": "Create and edit instances from the home page."
+    "instancesHint": "Create and edit instances from the home page.",
+    "update": {
+      "title": "Launcher updates",
+      "check": "Check for updates",
+      "devChannel": "dev channel",
+      "available": "New version v{version} available",
+      "viewRelease": "Download",
+      "upToDate": "You are on the latest version"
+    }
   },
   "instanceEdit": {
     "titleNew": "New instance",
