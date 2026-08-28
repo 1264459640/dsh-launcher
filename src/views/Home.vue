@@ -307,8 +307,10 @@ function goEditSelected() {
           {{ t(`home.status.${selectedStatus.state}`) }}
         </a-tag>
         <div v-if="running && selectedStatus?.url" class="running-url">
-          <a-link @click="onOpenWindow">{{ selectedStatus.url }}</a-link>
-          <a-button size="mini" type="text" @click="copyUrl(selectedStatus.url)">
+          <a-link class="url-link" :title="selectedStatus.url" @click="onOpenWindow">
+            {{ selectedStatus.url }}
+          </a-link>
+          <a-button size="mini" type="text" class="url-copy" @click="copyUrl(selectedStatus.url)">
             {{ t('common.copy') }}
           </a-button>
         </div>
@@ -478,6 +480,23 @@ function goEditSelected() {
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  max-width: 100%;
+  min-width: 0;
+
+  // Token-bearing URLs are long; ellipsize the link and keep the full URL
+  // in the hover title / copy button.
+  .url-link {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .url-copy {
+    flex-shrink: 0;
+  }
 }
 
 .action-block {

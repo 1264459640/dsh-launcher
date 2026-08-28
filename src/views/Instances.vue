@@ -126,7 +126,11 @@ async function onOpenWindow(id: string) {
             {{ t(`home.status.${store.statusOf(record.id).state}`) }}
           </a-tag>
           <template v-if="store.statusOf(record.id).url">
-            <a-link class="status-url" @click="onOpenWindow(record.id)">
+            <a-link
+              class="status-url"
+              :title="store.statusOf(record.id).url!"
+              @click="onOpenWindow(record.id)"
+            >
               {{ store.statusOf(record.id).url }}
             </a-link>
             <a-button size="mini" type="text" @click="copyUrl(store.statusOf(record.id).url!)">
@@ -196,6 +200,14 @@ async function onOpenWindow(id: string) {
 .status-url {
   margin-left: 8px;
   font-size: 12px;
+  // Token-bearing URLs are long; ellipsize inside the table cell and keep
+  // the full URL in the hover title / copy button.
+  display: inline-block;
+  max-width: 240px;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .empty-title {
