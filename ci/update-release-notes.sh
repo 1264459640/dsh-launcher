@@ -28,20 +28,37 @@ else
 fi
 
 # Same-kind tags: prerelease tags are v<ver>-dev.<n>, release tags are plain
-# v<ver> (no "-dev." suffix).
+# v<ver> with NO suffix. For releases the glob must NOT also match dev tags:
+# `v*` matches both, a dev tag always sorts below its release version and a
+# release tag is typically cut on the same commit as the last dev tag, so the
+# previous-tag range would come out empty and "What's Changed" would render
+# blank. Excluding just `-dev.` is not enough either — this repo carries
+# historical test tags like v0.1.0-test3 that have no `-dev.` suffix and would
+# otherwise be picked as the "previous release". Hence releases keep only
+# strict vX.Y.Z candidates.
 if [[ "$TAG" == *-dev.* ]]; then
   KIND_FILTER='v*-dev.*'
 else
-  KIND_FILTER='v*' # releases: plain v<ver> tags
+  KIND_FILTER='v*' # candidates; non-release suffixes filtered out below
 fi
 
 # Previous tag of the same kind, ordered by git tag version sort; the current
-# TAG is excluded so the previous one is picked even for re-runs.
-PREV_TAG="$(
-  git tag --list "$KIND_FILTER" --sort=-version:refname \
-    | grep -v -x "$TAG" \
-    | head -n 1 || true
-)"
+# TAG is excluded so the previous one is picked even for re-runs. For releases
+# the filter additionally drops every tag whose name is not strictly vX.Y.Z.
+if [[ "$TAG" == *-dev.* ]]; then
+  PREV_TAG="$(
+    git tag --list "$KIND_FILTER" --sort=-version:refname \
+      | grep -v -x "$TAG" \
+      | head -n 1 || true
+  )"
+else
+  PREV_TAG="$(
+    git tag --list "$KIND_FILTER" --sort=-version:refname \
+      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+      | grep -v -x "$TAG" \
+      | head -n 1 || true
+  )"
+fi
 
 if [[ -n "$PREV_TAG" ]]; then
   echo "collecting commits since $PREV_TAG"
