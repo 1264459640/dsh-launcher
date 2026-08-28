@@ -1338,7 +1338,7 @@ async fn run_dsh_plugin(
 
     for attempt in 1..=2 {
         let mut args: Vec<String> = vec![subcommand.to_string(), spec.to_string()];
-        args.extend(forwarded_pnpm_flags(state, loglevel));
+        args.extend(forwarded_pnpm_flags(state, loglevel, subcommand));
         let cmd = dsh_plugin_command(version_dir, home_path, profile, &args, &pnpm_prog)?;
 
         match crate::tasks::run_streamed_command(app, state, task_id, cmd, &what).await {
@@ -1431,7 +1431,7 @@ async fn relink_profile_store(
     pnpm_prog: &std::path::Path,
 ) -> Result<(), String> {
     let mut args: Vec<String> = vec!["install".to_string()];
-    args.extend(forwarded_pnpm_flags(state, "warn"));
+    args.extend(forwarded_pnpm_flags(state, "warn", "install"));
     let cmd = dsh_plugin_command(
         target.version_dir,
         target.home_path,
@@ -1495,7 +1495,12 @@ fn dsh_plugin_command(
         .arg("--profile")
         .arg(profile)
         .args(pnpm_args)
-        .env("DSH_HOME", home_path);
+        .env("DSH_HOME", home_path)
+        // The launcher can never answer an interactive prompt: pnpm aborts
+        // with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY when it needs to
+        // purge a modules dir (store/virtual-store relink) without a TTY.
+        // CI=true makes pnpm treat the run as non-interactive instead.
+        .env("CI", "true");
 
     // Prepend the pinned pnpm's directory so the CLI's `spawnSync("pnpm")`
     // picks it up instead of whatever major is on the user's PATH.
@@ -1524,21 +1529,29 @@ fn dsh_plugin_command(
 /// robustness, optional registry mirror). `--prefix` is deliberately absent:
 /// the CLI already runs pnpm with cwd = the profile directory, and passing a
 /// prefix would break that contract.
-fn forwarded_pnpm_flags(state: &State<'_, AppState>, loglevel: &str) -> Vec<String> {
+///
+/// The fetch/network flags only exist on download commands (`add` /
+/// `install`): `pnpm remove` rejects them outright ("Unknown options:
+/// 'fetch-timeout', …") and would fail before touching anything.
+fn forwarded_pnpm_flags(state: &State<'_, AppState>, loglevel: &str, subcommand: &str) -> Vec<String> {
     let store_dir = state.data_dir.join(".pnpm-store");
     let mut args: Vec<String> = vec![
         "--store-dir".to_string(),
         store_dir.to_string_lossy().to_string(),
         format!("--loglevel={loglevel}"),
-        "--fetch-timeout".to_string(),
-        "300000".to_string(),
-        "--fetch-retries".to_string(),
-        "5".to_string(),
-        "--fetch-retry-maxtimeout".to_string(),
-        "120000".to_string(),
-        "--network-concurrency".to_string(),
-        "4".to_string(),
     ];
+    if subcommand != "remove" {
+        args.extend([
+            "--fetch-timeout".to_string(),
+            "300000".to_string(),
+            "--fetch-retries".to_string(),
+            "5".to_string(),
+            "--fetch-retry-maxtimeout".to_string(),
+            "120000".to_string(),
+            "--network-concurrency".to_string(),
+            "4".to_string(),
+        ]);
+    }
     if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
         let registry = registry.trim().to_string();
         if !registry.is_empty() {

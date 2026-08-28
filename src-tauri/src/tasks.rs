@@ -565,6 +565,10 @@ async fn install_version_streamed(
             }
         }
         cmd.arg(format!("@deepseek-ai/dsh@{version}"));
+        // No TTY under the launcher: keep pnpm non-interactive so a modules
+        // purge (store relink) never aborts with
+        // ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY.
+        cmd.env("CI", "true");
 
         match run_streamed_command(app, state, task_id, cmd, "pnpm install").await {
             Ok(()) => break,
@@ -878,6 +882,21 @@ pub(crate) async fn run_streamed_command(
     mut cmd: tokio::process::Command,
     what: &str,
 ) -> Result<(), String> {
+    // Echo the exact command line into the task log: when a child fails
+    // silently (pnpm at --loglevel=warn prints nothing for some errors), the
+    // invocation itself is the only clue.
+    let cmdline = {
+        let std_cmd = cmd.as_std();
+        let mut s = std_cmd.get_program().to_string_lossy().to_string();
+        for arg in std_cmd.get_args() {
+            s.push(' ');
+            s.push_str(&arg.to_string_lossy());
+        }
+        s
+    };
+    push_task_log_pub(app, state, task_id, &format!("$ {cmdline}")).await;
+    crate::log_debug!("run_streamed_command[{what}]: {cmdline}");
+
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("{what} 启动失败: {e}（请确认已安装 Node.js 与 pnpm）"))?;
@@ -893,15 +912,16 @@ pub(crate) async fn run_streamed_command(
         }
     }
 
+    let mut pipe_readers = Vec::new();
     for pipe in [stdout.map(StreamPipe::Out), stderr.map(StreamPipe::Err)]
         .into_iter()
         .flatten()
     {
         let app2 = app.clone();
         let tid = task_id.to_string();
-        tauri::async_runtime::spawn(async move {
+        pipe_readers.push(tauri::async_runtime::spawn(async move {
             stream_pipe(app2, tid, pipe).await;
-        });
+        }));
     }
 
     // Heartbeat keeps the percent moving while the command is quiet.
@@ -965,6 +985,14 @@ pub(crate) async fn run_streamed_command(
         }
     }
 
+    // Drain the pipe readers before judging the outcome: the child has
+    // exited but the reader tasks may still be flushing buffered lines into
+    // the task log. Reading the log here without waiting races them and
+    // loses the very error lines the failure summary is built from.
+    for reader in pipe_readers {
+        let _ = reader.await;
+    }
+
     if !status.success() {
         let logs = {
             let tasks = state.tasks.lock().await;
@@ -974,30 +1002,46 @@ pub(crate) async fn run_streamed_command(
                 .unwrap_or_default()
         };
         // Prefer a meaningful error line (pnpm error codes, "error:",
-        // "aborted", "failed", "timeout") over the last line, which is often
-        // a stack-trace tail. Keep the pnpm error code (e.g.
-        // ERR_PNPM_IGNORED_BUILDS) visible so callers can react to it.
-        let last = logs
-            .iter()
-            .rev()
-            .find(|l| {
-                let s = l.to_lowercase();
-                s.contains("err_pnpm")
-                    || s.contains("error")
-                    || s.contains("aborted")
-                    || s.contains("failed")
-                    || s.contains("timeout")
-            })
-            .cloned()
-            .unwrap_or_else(|| {
-                logs.iter()
+        // "aborted", "failed", "timeout") and keep the lines around it —
+        // pnpm's remedy ("reinstall your dependencies with pnpm install")
+        // sits on the following lines and is exactly what the user needs.
+        let is_error_line = |l: &str| {
+            let s = l.to_lowercase();
+            s.contains("err_pnpm")
+                || s.contains("error")
+                || s.contains("aborted")
+                || s.contains("failed")
+                || s.contains("timeout")
+        };
+        let summary = match logs.iter().rposition(|l| is_error_line(l)) {
+            Some(i) => logs[i..]
+                .iter()
+                .filter(|l| !l.trim().is_empty())
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | "),
+            None => {
+                let mut tail: Vec<String> = logs
+                    .iter()
                     .rev()
-                    .find(|l| !l.trim().is_empty())
+                    .filter(|l| !l.trim().is_empty())
+                    .take(3)
                     .cloned()
-                    .unwrap_or_else(|| format!("{what} 退出码 {status}"))
-            });
-        return Err(format!("{what} 失败: {last}"));
+                    .collect();
+                tail.reverse();
+                tail.join(" | ")
+            }
+        };
+        let summary = if summary.is_empty() {
+            format!("{what} 退出码 {status}（子进程未输出任何日志）")
+        } else {
+            summary
+        };
+        crate::log_warn!("{what} 失败（{status}）: {summary}");
+        return Err(format!("{what} 失败: {summary}"));
     }
+    crate::log_debug!("run_streamed_command[{what}]: 完成");
     Ok(())
 }
 
