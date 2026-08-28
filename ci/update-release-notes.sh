@@ -4,8 +4,17 @@
 # flag kept from prepare).
 #
 # Commit collection scope:
-#   prerelease (v<ver>-dev.<n>)  -> commits since the previous prerelease tag
+#   prerelease (v<ver>-dev.<n>)  -> commits since the previous tag of EITHER
+#                                   kind — the nearest dev or release tag by
+#                                   semantic version (a release outranks its
+#                                   own dev tags). Right after a release the
+#                                   first dev of the new cycle thus collects
+#                                   everything since that release, while
+#                                   later devs stay incremental.
 #   release    (v<ver>)          -> commits since the previous release tag
+#                                   (strict vX.Y.Z only; the newest dev tag
+#                                   usually sits on the same commit and
+#                                   would render "What's Changed" blank)
 set -euo pipefail
 
 RELEASE_ID="${1:?release id}"
@@ -27,33 +36,34 @@ else
   git fetch --tags --force --quiet
 fi
 
-# Same-kind tags: prerelease tags are v<ver>-dev.<n>, release tags are plain
-# v<ver> with NO suffix. For releases the glob must NOT also match dev tags:
-# `v*` matches both, a dev tag always sorts below its release version and a
-# release tag is typically cut on the same commit as the last dev tag, so the
-# previous-tag range would come out empty and "What's Changed" would render
-# blank. Excluding just `-dev.` is not enough either — this repo carries
-# historical test tags like v0.1.0-test3 that have no `-dev.` suffix and would
-# otherwise be picked as the "previous release". Hence releases keep only
-# strict vX.Y.Z candidates.
+# The current TAG is always excluded so the previous one is picked even for
+# re-runs. All filters use strict patterns — this repo carries historical
+# test tags like v0.1.0-test3 / v0.1.0-step1 that must never qualify.
 if [[ "$TAG" == *-dev.* ]]; then
-  KIND_FILTER='v*-dev.*'
-else
-  KIND_FILTER='v*' # candidates; non-release suffixes filtered out below
-fi
-
-# Previous tag of the same kind, ordered by git tag version sort; the current
-# TAG is excluded so the previous one is picked even for re-runs. For releases
-# the filter additionally drops every tag whose name is not strictly vX.Y.Z.
-if [[ "$TAG" == *-dev.* ]]; then
+  # Dev builds: base on the previous tag of EITHER kind — strict release or
+  # dev prerelease — nearest by semantic version. git's version:refname sort
+  # cannot be used here: it orders a dev tag ABOVE its own release
+  # (v0.2.0-dev.49 > v0.2.0), which would anchor the first dev of a new
+  # cycle to the PREVIOUS cycle's last dev tag and leak already-released
+  # commits into the notes. Instead each candidate gets a sort key in which
+  # the release sorts after its devs (suffix "zzzz" > "dev"), and GNU
+  # sort -rV orders the keys semantically.
   PREV_TAG="$(
-    git tag --list "$KIND_FILTER" --sort=-version:refname \
+    git tag --list 'v*' \
+      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-dev\.[0-9]+)?$' \
       | grep -v -x "$TAG" \
-      | head -n 1 || true
+      | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+)$/\1-zzzz &/; t; s/^v([0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+)$/\1 &/' \
+      | sort -rV \
+      | head -n 1 \
+      | cut -d' ' -f2- || true
   )"
 else
+  # Releases: strict vX.Y.Z only. A dev tag always sorts below its release
+  # version and the release tag is typically cut on the same commit as the
+  # last dev tag, so a same-commit dev base would produce an empty range and
+  # a blank "What's Changed".
   PREV_TAG="$(
-    git tag --list "$KIND_FILTER" --sort=-version:refname \
+    git tag --list 'v*' --sort=-version:refname \
       | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
       | grep -v -x "$TAG" \
       | head -n 1 || true
@@ -65,7 +75,7 @@ if [[ -n "$PREV_TAG" ]]; then
   # Subject-only commit list, newest first, skipping merge commits.
   git log --no-merges --format='%s' "$PREV_TAG..HEAD" > commits.txt
 else
-  echo "no previous $([[ "$TAG" == *-dev.* ]] && echo prerelease || echo release) tag found; listing all commits"
+  echo "no previous tag found; listing all commits"
   git log --no-merges --format='%s' > commits.txt
 fi
 
