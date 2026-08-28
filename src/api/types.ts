@@ -124,6 +124,18 @@ export interface RemoteVersion {
   source?: 'npm' | 'github' | null
 }
 
+/** Modpack export overrides; unset fields fall back to profile-derived defaults. */
+export interface ExportModpackInput {
+  home_id: string
+  profile: string
+  out_dir: string
+  name?: string
+  version?: string
+  displayName?: string
+  description?: string
+  author?: string
+}
+
 export interface NewInstanceInput {
   name: string
   version_id: string

@@ -262,6 +262,92 @@ async function confirmDeleteProfile(name: string) {
   }
 }
 
+// --- Modpack (整合包) export/import ----------------------------------------------
+
+const exportProfile = ref<string | null>(null)
+const exportBusy = ref(false)
+const exportForm = ref({
+  name: '',
+  version: '1.0.0',
+  displayName: '',
+  description: '',
+  author: '',
+  outDir: '',
+})
+
+function startExportModpack(profile: string) {
+  exportProfile.value = profile
+  exportForm.value = {
+    name: profile,
+    version: '1.0.0',
+    displayName: '',
+    description: '',
+    author: '',
+    outDir: '',
+  }
+}
+
+async function pickExportDir() {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const dir = await open({ directory: true, multiple: false })
+  if (typeof dir === 'string') exportForm.value.outDir = dir
+}
+
+async function confirmExportModpack() {
+  if (!homeId.value || !exportProfile.value || !exportForm.value.outDir) return
+  exportBusy.value = true
+  try {
+    const path = await api.exportModpack({
+      home_id: homeId.value,
+      profile: exportProfile.value,
+      out_dir: exportForm.value.outDir,
+      name: exportForm.value.name.trim() || undefined,
+      version: exportForm.value.version.trim() || undefined,
+      displayName: exportForm.value.displayName.trim() || undefined,
+      description: exportForm.value.description.trim() || undefined,
+      author: exportForm.value.author.trim() || undefined,
+    })
+    exportProfile.value = null
+    Message.success(t('instanceEdit.modpackExported', { path }))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    exportBusy.value = false
+  }
+}
+
+const importVisible = ref(false)
+const importSource = ref('')
+const importForce = ref(false)
+const importBusy = ref(false)
+
+async function pickImportFile() {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const file = await open({
+    multiple: false,
+    filters: [{ name: 'DSH Modpack', extensions: ['tgz'] }],
+  })
+  if (typeof file === 'string') importSource.value = file
+}
+
+async function confirmImportModpack() {
+  if (!homeId.value || !importSource.value.trim()) return
+  importBusy.value = true
+  try {
+    await api.startImportModpackTask(homeId.value, importSource.value.trim(), importForce.value)
+    importVisible.value = false
+    importSource.value = ''
+    importForce.value = false
+    await store.refreshTasks()
+    Message.success(t('download.taskAdded'))
+    router.push({ name: 'tasks' })
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    importBusy.value = false
+  }
+}
+
 // --- Plugins tab ---------------------------------------------------------------
 
 const pluginProfile = ref<string>('')
@@ -532,6 +618,7 @@ const terminalRunning = ref(false)
                   <span class="profile-item-actions">
                     <a-button size="small" @click="startRenameProfile(p)">{{ t('instanceEdit.profileRename') }}</a-button>
                     <a-button size="small" @click="startCopyProfile(p)">{{ t('instanceEdit.profileCopy') }}</a-button>
+                    <a-button size="small" @click="startExportModpack(p)">{{ t('instanceEdit.modpackExport') }}</a-button>
                     <a-button
                       v-if="defaultProfile !== p"
                       size="small"
@@ -567,6 +654,9 @@ const terminalRunning = ref(false)
 
               <a-button v-if="!addingProfile" size="small" class="profile-add-btn" @click="addingProfile = true">
                 {{ t('instanceEdit.profileAdd') }}
+              </a-button>
+              <a-button size="small" class="profile-add-btn" @click="importVisible = true">
+                {{ t('instanceEdit.modpackImport') }}
               </a-button>
             </template>
 
@@ -709,6 +799,67 @@ const terminalRunning = ref(false)
         </div>
       </a-scrollbar>
     </section>
+
+    <!-- Modpack export -->
+    <a-modal
+      :visible="exportProfile !== null"
+      :title="t('instanceEdit.modpackExportTitle', { name: exportProfile ?? '' })"
+      :ok-loading="exportBusy"
+      :ok-button-props="{ disabled: !exportForm.outDir }"
+      @ok="confirmExportModpack"
+      @cancel="exportProfile = null"
+    >
+      <a-form :model="exportForm" layout="vertical">
+        <a-form-item :label="t('instanceEdit.modpackName')">
+          <a-input v-model="exportForm.name" />
+        </a-form-item>
+        <a-form-item :label="t('instanceEdit.modpackVersion')">
+          <a-input v-model="exportForm.version" placeholder="1.0.0" />
+        </a-form-item>
+        <a-form-item :label="t('instanceEdit.modpackDisplayName')">
+          <a-input v-model="exportForm.displayName" />
+        </a-form-item>
+        <a-form-item :label="t('instanceEdit.modpackDescription')">
+          <a-textarea v-model="exportForm.description" :auto-size="{ minRows: 2, maxRows: 4 }" />
+        </a-form-item>
+        <a-form-item :label="t('instanceEdit.modpackAuthor')">
+          <a-input v-model="exportForm.author" />
+        </a-form-item>
+        <a-form-item :label="t('instanceEdit.modpackOutDir')" required>
+          <a-input v-model="exportForm.outDir" readonly :placeholder="t('instanceEdit.modpackOutDirHint')">
+            <template #append>
+              <a-button @click="pickExportDir">{{ t('settings.pickDir') }}</a-button>
+            </template>
+          </a-input>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- Modpack import -->
+    <a-modal
+      v-model:visible="importVisible"
+      :title="t('instanceEdit.modpackImportTitle')"
+      :ok-loading="importBusy"
+      :ok-button-props="{ disabled: !importSource.trim() }"
+      @ok="confirmImportModpack"
+    >
+      <a-form :model="{ source: importSource, force: importForce }" layout="vertical">
+        <a-form-item :label="t('instanceEdit.modpackSource')" required>
+          <a-input
+            v-model="importSource"
+            :placeholder="t('instanceEdit.modpackSourceHint')"
+            allow-clear
+          >
+            <template #append>
+              <a-button @click="pickImportFile">{{ t('instanceEdit.modpackPickFile') }}</a-button>
+            </template>
+          </a-input>
+        </a-form-item>
+        <a-form-item>
+          <a-checkbox v-model="importForce">{{ t('instanceEdit.modpackForce') }}</a-checkbox>
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 

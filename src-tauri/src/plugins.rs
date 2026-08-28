@@ -204,14 +204,14 @@ fn parse_github_body(body: &str) -> Option<(String, Option<String>)> {
 
 /// Parses a launcher plugin id of the form `github:owner/repo` or
 /// `github:owner/repo#path:<subdir>` into (repo, subdir).
-fn parse_github_id(id: &str) -> Option<(String, Option<String>)> {
+pub(crate) fn parse_github_id(id: &str) -> Option<(String, Option<String>)> {
     parse_github_body(id.strip_prefix("github:")?)
 }
 
 /// Builds the pnpm install spec for a git-hosted plugin: the repo at `git_ref`
 /// (a commit sha for alpha, a release tag for stable/beta), plus
 /// `&path:<subdir>` for monorepo plugins (pnpm splits the fragment on '&').
-fn github_install_spec(repo: &str, git_ref: &str, subpath: Option<&str>) -> String {
+pub(crate) fn github_install_spec(repo: &str, git_ref: &str, subpath: Option<&str>) -> String {
     match subpath {
         Some(p) => format!("github:{repo}#{git_ref}&path:{p}"),
         None => format!("github:{repo}#{git_ref}"),
@@ -725,6 +725,11 @@ async fn alpha_commit(plugin_id: &str, page: u32) -> Result<PluginVersionPage, S
 /// Path of a profile dir under a DSH_HOME.
 fn profile_dir(home_path: &std::path::Path, profile: &str) -> std::path::PathBuf {
     home_path.join("profiles").join(profile)
+}
+
+/// `pub(crate)` for the modpack module (issue #5).
+pub(crate) fn profile_dir_pub(home_path: &std::path::Path, profile: &str) -> std::path::PathBuf {
+    profile_dir(home_path, profile)
 }
 
 /// Read the profile package.json (dsh.profile.bundles + dependencies).

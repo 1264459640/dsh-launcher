@@ -2,6 +2,7 @@ mod applog;
 mod commands;
 mod config;
 mod doctor;
+mod modpack;
 mod plugins;
 mod process;
 mod runtime;
@@ -136,6 +137,8 @@ pub fn run() {
             plugins::set_plugins_enabled,
             plugins::uninstall_plugin,
             plugins::start_install_plugin_task,
+            modpack::export_modpack,
+            modpack::start_import_modpack_task,
             terminal::start_terminal_session,
             terminal::write_terminal_input,
             terminal::resize_terminal_session,

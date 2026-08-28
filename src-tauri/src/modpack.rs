@@ -1,0 +1,791 @@
+//! Modpack (整合包) export/import — issue #5.
+//!
+//! A modpack is a `.tgz` holding a complete DSH profile: `manifest.json`
+//! (metadata + pinned plugin coordinates), `package.json`, `cordis.patch.yml`,
+//! and optionally `pnpm-lock.yaml` / `pnpm-workspace.yaml` so transitive deps
+//! stay locked. The launcher writes manifest version 3:
+//!
+//! - `dependencies` maps a coordinate to an exact version: an npm name to its
+//!   installed version, or `github:owner/repo[#path:/sub]` to a commit sha.
+//! - `displayName` / `description` accept a plain string or a locale map
+//!   (`{ "en-US": "...", "zh-CN": "..." }`).
+//!
+//! Manifest version 2 packs (string fields, pnpm-spec dependency values like
+//! `git+https://...`) are still accepted on import.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, State};
+
+use crate::config::new_id;
+use crate::AppState;
+
+/// Manifest version the launcher writes.
+pub const MANIFEST_VERSION: u32 = 3;
+
+/// Modpack manifest. `display_name` / `description` stay untyped: v3 allows
+/// either a string or a `{locale: text}` map, and both round-trip verbatim.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModpackManifest {
+    #[serde(rename = "manifestVersion")]
+    pub manifest_version: u32,
+    pub name: String,
+    #[serde(default, rename = "displayName")]
+    pub display_name: Option<serde_json::Value>,
+    pub version: String,
+    #[serde(default)]
+    pub description: Option<serde_json::Value>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default, rename = "dshVersion")]
+    pub dsh_version: Option<String>,
+    #[serde(default, rename = "profileName")]
+    pub profile_name: Option<String>,
+    #[serde(default)]
+    pub bundles: Vec<String>,
+    #[serde(default)]
+    pub dependencies: BTreeMap<String, String>,
+    #[serde(default)]
+    pub patch: Option<String>,
+}
+
+/// Export overrides: every field falls back to a sensible default derived
+/// from the profile.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ExportModpackInput {
+    pub home_id: String,
+    pub profile: String,
+    /// Directory the `.tgz` is written into.
+    pub out_dir: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default, rename = "displayName")]
+    pub display_name: Option<serde_json::Value>,
+    #[serde(default)]
+    pub description: Option<serde_json::Value>,
+    #[serde(default)]
+    pub author: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ImportModpackInput {
+    pub home_id: String,
+    /// Local `.tgz` path or an http(s) URL.
+    pub source: String,
+    /// Replace an existing profile with the same name.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Maximum accepted modpack size (64 MiB).
+const MODPACK_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn home_path_of(state: &AppState, home_id: &str) -> Result<PathBuf, String> {
+    state
+        .config
+        .lock()
+        .unwrap()
+        .homes
+        .iter()
+        .find(|h| h.id == home_id)
+        .map(|h| h.path.clone())
+        .ok_or_else(|| "DSH_HOME 不存在".to_string())
+}
+
+/// Whether a pnpm dependency spec points at a git host (GitHub).
+fn is_git_spec(spec: &str) -> bool {
+    spec.starts_with("git+") || spec.starts_with("github:") || spec.contains("github.com")
+}
+
+/// Extracts `owner/repo` from a git-ish spec (`git+https://github.com/o/r.git#ref`,
+/// `github:o/r#ref`, `https://github.com/o/r`).
+fn github_repo_from_spec(spec: &str) -> Option<(String, Option<String>, Option<String>)> {
+    // Returns (repo, subpath, ref).
+    let body = spec
+        .strip_prefix("git+")
+        .unwrap_or(spec)
+        .trim_end_matches(".git");
+    if let Some((repo, sub)) = crate::plugins::parse_github_id(body) {
+        return Some((repo, sub, None));
+    }
+    let path = body
+        .strip_prefix("https://github.com/")
+        .or_else(|| body.strip_prefix("http://github.com/"))
+        .or_else(|| body.strip_prefix("ssh://git@github.com/"))?;
+    let (base, frag) = path.split_once('#').unwrap_or((path, ""));
+    let mut seg = base.trim_matches('/').split('/');
+    let repo = format!("{}/{}", seg.next()?, seg.next()?);
+    // pnpm's `#<committish>&path:<sub>` fragment form.
+    let mut git_ref = None;
+    let mut sub = None;
+    for part in frag.split('&') {
+        if part.is_empty() {
+            continue;
+        }
+        if let Some(p) = part.strip_prefix("path:") {
+            sub = Some(p.trim_matches('/').to_string());
+        } else {
+            git_ref = Some(part.to_string());
+        }
+    }
+    Some((repo, sub.filter(|s| !s.is_empty()), git_ref))
+}
+
+/// The commit a git dependency resolved to, read from the profile's
+/// pnpm-lock.yaml (`importers..dependencies.<pkg>.version` looks like
+/// `name@https://codeload.github.com/owner/repo/tar.gz/<sha>` or
+/// `github.com/owner/repo/<sha>`).
+fn locked_git_commit(lock_text: &str, pkg: &str) -> Option<String> {
+    let doc: serde_yaml::Value = serde_yaml::from_str(lock_text).ok()?;
+    let importers = doc.get("importers")?;
+    for (_path, importer) in importers.as_mapping()? {
+        for section in ["dependencies", "devDependencies"] {
+            let entry = importer.get(section)?.get(pkg)?;
+            let version = entry.get("version")?.as_str()?;
+            // version: "<pkg>(<peer>)?@<resolved>" — take the part after '@'.
+            let resolved = version.rsplit('@').next()?;
+            let sha = resolved.trim_end_matches(')').rsplit('/').next()?;
+            if sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(sha.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// The installed version of an npm dependency, from its package.json.
+fn installed_npm_version(profile: &Path, pkg: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(profile.join("node_modules").join(pkg).join("package.json"))
+        .ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    doc.get("version")?.as_str().map(|s| s.to_string())
+}
+
+/// Writes the modpack tgz (files at the archive root) and returns its path.
+fn write_modpack_tgz(
+    out_dir: &Path,
+    file_name: &str,
+    files: &[(&str, Vec<u8>)],
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("创建输出目录失败: {e}"))?;
+    let out = out_dir.join(file_name);
+    let file = std::fs::File::create(&out).map_err(|e| format!("创建整合包文件失败: {e}"))?;
+    let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut builder = tar::Builder::new(gz);
+    for (name, bytes) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, name, bytes.as_slice())
+            .map_err(|e| format!("写入整合包条目 {name} 失败: {e}"))?;
+    }
+    builder
+        .finish()
+        .map_err(|e| format!("写入整合包失败: {e}"))?;
+    Ok(out)
+}
+
+/// Extracts a modpack tgz into `dest`, refusing path-traversal entries.
+fn extract_modpack_tgz(tgz: &Path, dest: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(tgz).map_err(|e| format!("打开整合包失败: {e}"))?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    std::fs::create_dir_all(dest).map_err(|e| format!("创建解压目录失败: {e}"))?;
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("读取整合包失败: {e}"))?
+    {
+        let mut entry = entry.map_err(|e| format!("读取整合包条目失败: {e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("读取整合包条目名失败: {e}"))?
+            .into_owned();
+        // Normalize: strip leading "./" and reject anything escaping dest.
+        let clean: PathBuf = path
+            .components()
+            .filter(|c| matches!(c, std::path::Component::Normal(_)))
+            .collect();
+        if clean.as_os_str().is_empty() {
+            continue;
+        }
+        if entry.header().entry_type().is_dir() {
+            std::fs::create_dir_all(dest.join(&clean)).ok();
+            continue;
+        }
+        if entry.header().entry_type().is_file() {
+            if let Some(parent) = clean.parent() {
+                std::fs::create_dir_all(dest.join(parent))
+                    .map_err(|e| format!("创建解压目录失败: {e}"))?;
+            }
+            std::io::copy(
+                &mut entry,
+                &mut std::fs::File::create(dest.join(&clean))
+                    .map_err(|e| format!("创建解压文件失败: {e}"))?,
+            )
+            .map_err(|e| format!("解压条目失败: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+/// Exports a profile as a manifest-v3 modpack tgz. Dependencies are pinned:
+/// npm specs become the installed version, git specs become
+/// `github:owner/repo[#path:/sub]` → resolved commit sha.
+#[tauri::command]
+pub fn export_modpack(
+    state: State<'_, AppState>,
+    input: ExportModpackInput,
+) -> Result<String, String> {
+    let home = home_path_of(&state, &input.home_id)?;
+    let profile_dir = crate::plugins::profile_dir_pub(&home, &input.profile);
+    let pkg_path = profile_dir.join("package.json");
+    let raw = std::fs::read_to_string(&pkg_path)
+        .map_err(|e| format!("读取 profile manifest 失败: {e}"))?;
+    let pkg: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("解析 profile manifest 失败: {e}"))?;
+
+    let bundles: Vec<String> = pkg
+        .pointer("/dsh/profile/bundles")
+        .and_then(|b| b.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|b| b.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let lock_text = std::fs::read_to_string(profile_dir.join("pnpm-lock.yaml")).ok();
+    let mut pinned = BTreeMap::new();
+    if let Some(deps) = pkg.get("dependencies").and_then(|d| d.as_object()) {
+        for (name, spec) in deps {
+            let spec = spec.as_str().unwrap_or_default();
+            if is_git_spec(spec) {
+                let Some((repo, sub, spec_ref)) = github_repo_from_spec(spec) else {
+                    crate::log_warn!("整合包导出：无法解析 git 依赖 {name}: {spec}，按原样保留");
+                    pinned.insert(name.clone(), spec.to_string());
+                    continue;
+                };
+                let sha = lock_text
+                    .as_deref()
+                    .and_then(|l| locked_git_commit(l, name))
+                    .or(spec_ref)
+                    .unwrap_or_else(|| "HEAD".to_string());
+                let coord = match &sub {
+                    Some(p) => format!("github:{repo}#path:/{p}"),
+                    None => format!("github:{repo}"),
+                };
+                pinned.insert(coord, sha);
+            } else {
+                let version = installed_npm_version(&profile_dir, name)
+                    .unwrap_or_else(|| spec.trim_start_matches(['^', '~']).to_string());
+                pinned.insert(name.clone(), version);
+            }
+        }
+    }
+
+    // dshVersion: the first instance bound to this HOME defines the floor.
+    let dsh_version = {
+        let cfg = state.config.lock().unwrap();
+        cfg.instances
+            .iter()
+            .find(|i| i.home_id == input.home_id)
+            .and_then(|i| cfg.versions.iter().find(|v| v.id == i.version_id))
+            .map(|v| format!(">={}", v.version))
+            .unwrap_or_else(|| ">=0.1.0".to_string())
+    };
+
+    let name = input
+        .name
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| input.profile.clone());
+    let version = input
+        .version
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "1.0.0".to_string());
+
+    let patch = std::fs::read_to_string(profile_dir.join("cordis.patch.yml")).ok();
+    let manifest = ModpackManifest {
+        manifest_version: MANIFEST_VERSION,
+        name: name.clone(),
+        display_name: input.display_name,
+        version: version.clone(),
+        description: input.description,
+        author: input.author,
+        icon: None,
+        dsh_version: Some(dsh_version),
+        profile_name: Some(input.profile.clone()),
+        bundles: bundles.clone(),
+        dependencies: pinned,
+        patch,
+    };
+
+    let profile_pkg = serde_json::json!({
+        "name": format!("dsh-profile-{}", input.profile),
+        "private": true,
+        "dependencies": manifest_pkg_deps(&manifest),
+        "dsh": { "profile": { "bundles": bundles } },
+    });
+
+    let mut files: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "manifest.json",
+            serde_json::to_vec_pretty(&manifest)
+                .map_err(|e| format!("序列化 manifest 失败: {e}"))?,
+        ),
+        (
+            "package.json",
+            serde_json::to_vec_pretty(&profile_pkg)
+                .map_err(|e| format!("序列化 package.json 失败: {e}"))?,
+        ),
+    ];
+    if let Some(p) = &manifest.patch {
+        files.push(("cordis.patch.yml", p.clone().into_bytes()));
+    }
+    if let Ok(lock) = std::fs::read(profile_dir.join("pnpm-lock.yaml")) {
+        files.push(("pnpm-lock.yaml", lock));
+    }
+    if let Ok(ws) = std::fs::read(profile_dir.join("pnpm-workspace.yaml")) {
+        files.push(("pnpm-workspace.yaml", ws));
+    }
+
+    let out = write_modpack_tgz(
+        Path::new(&input.out_dir),
+        &format!("{name}-{version}.tgz"),
+        &files,
+    )?;
+    crate::log_info!("已导出整合包 {}", out.display());
+    Ok(out.to_string_lossy().to_string())
+}
+
+/// Converts manifest dependencies into pnpm-installable package.json specs.
+/// v3 coordinates (`github:owner/repo[#path:/sub]` → ref) become
+/// `github:owner/repo#<ref>&path:<sub>`; npm names keep their (pinned)
+/// version. v2 values are already pnpm specs and pass through.
+fn manifest_pkg_deps(manifest: &ModpackManifest) -> BTreeMap<String, String> {
+    let mut deps = BTreeMap::new();
+    for (coord, version) in &manifest.dependencies {
+        if let Some((repo, sub)) = crate::plugins::parse_github_id(coord) {
+            // package.json key must be a package name; derive it from the repo.
+            let pkg_name = coord_to_pkg_name(coord);
+            deps.insert(
+                pkg_name,
+                crate::plugins::github_install_spec(&repo, version, sub.as_deref()),
+            );
+        } else {
+            deps.insert(coord.clone(), version.clone());
+        }
+    }
+    deps
+}
+
+/// Derives a package name from a github coordinate: the repo basename, or
+/// the subpath basename for monorepo plugins.
+fn coord_to_pkg_name(coord: &str) -> String {
+    let body = coord.trim_start_matches("github:");
+    let last = body
+        .rsplit(['#', '/'])
+        .find(|s| !s.is_empty() && *s != "path:")
+        .unwrap_or(body);
+    last.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------------
+
+/// Starts a background task that installs a modpack into a HOME's profiles.
+#[tauri::command]
+pub async fn start_import_modpack_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: ImportModpackInput,
+) -> Result<String, String> {
+    let home = home_path_of(&state, &input.home_id)?;
+    if !home.exists() {
+        return Err(format!("DSH_HOME 目录不存在: {}", home.display()));
+    }
+
+    let task = crate::tasks::TaskInfo {
+        id: new_id("t"),
+        kind: "import-modpack".to_string(),
+        label: format!("导入整合包 {} 到「{}」", input.source, input.home_id),
+        version: String::new(),
+        state: crate::tasks::TaskState::Running,
+        percent: 0,
+        created_at: crate::tasks::now_millis_pub(),
+        message: None,
+        instance_id: None,
+        instance_name: Some(input.source.clone()),
+        reserved_home_path: None,
+        logs: Vec::new(),
+        child: None,
+    };
+    let task_id = task.id.clone();
+    state.tasks.lock().await.insert(task_id.clone(), task);
+    crate::tasks::emit_progress_pub(
+        &app,
+        &task_id,
+        crate::tasks::TaskState::Running,
+        0,
+        None,
+        None,
+    );
+
+    let worker_app = app.clone();
+    let worker_task_id = task_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = worker_app.state::<AppState>();
+        let result = do_import_modpack(&worker_app, &state, &worker_task_id, &input).await;
+        let mut tasks = state.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(&worker_task_id) {
+            if task.state == crate::tasks::TaskState::Cancelled {
+                return;
+            }
+            match result {
+                Ok(profile) => {
+                    task.state = crate::tasks::TaskState::Done;
+                    task.percent = 100;
+                    task.message = Some(format!("已导入 profile「{profile}」"));
+                    crate::tasks::emit_progress_pub(
+                        &worker_app,
+                        &worker_task_id,
+                        crate::tasks::TaskState::Done,
+                        100,
+                        Some(format!("已导入 profile「{profile}」")),
+                        None,
+                    );
+                }
+                Err(msg) => {
+                    task.state = crate::tasks::TaskState::Error;
+                    task.message = Some(msg.clone());
+                    crate::tasks::push_log_locked_pub(task, &format!("error: {msg}"));
+                    let pct = task.percent;
+                    drop(tasks);
+                    crate::tasks::emit_progress_pub(
+                        &worker_app,
+                        &worker_task_id,
+                        crate::tasks::TaskState::Error,
+                        pct,
+                        Some(msg),
+                        None,
+                    );
+                }
+            }
+        }
+    });
+
+    Ok(task_id)
+}
+
+async fn do_import_modpack(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+    input: &ImportModpackInput,
+) -> Result<String, String> {
+    let home = home_path_of(state, &input.home_id)?;
+
+    // 1. Obtain the tgz locally.
+    let tmp = std::env::temp_dir().join(format!("dsh-modpack-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("创建临时目录失败: {e}"))?;
+    let guard = TmpDir(tmp.clone());
+    let tgz = if input.source.starts_with("https://") || input.source.starts_with("http://") {
+        crate::tasks::push_task_log_pub(app, state, task_id, "正在下载整合包…").await;
+        let target = tmp.join("modpack.tgz");
+        download_modpack(&input.source, &target).await?;
+        target
+    } else {
+        let p = PathBuf::from(&input.source);
+        if !p.exists() {
+            return Err(format!("整合包文件不存在: {}", p.display()));
+        }
+        p
+    };
+
+    // 2. Extract + validate the manifest.
+    let unpacked = tmp.join("pack");
+    extract_modpack_tgz(&tgz, &unpacked)?;
+    let manifest_raw = std::fs::read_to_string(unpacked.join("manifest.json"))
+        .map_err(|_| "整合包缺少 manifest.json".to_string())?;
+    let manifest: ModpackManifest =
+        serde_json::from_str(&manifest_raw).map_err(|e| format!("解析 manifest.json 失败: {e}"))?;
+    if !(2..=MANIFEST_VERSION).contains(&manifest.manifest_version) {
+        return Err(format!(
+            "不支持的 manifestVersion {}（支持 2-{MANIFEST_VERSION}）",
+            manifest.manifest_version
+        ));
+    }
+    let profile_name = manifest
+        .profile_name
+        .clone()
+        .unwrap_or_else(|| manifest.name.clone());
+    let profile_name = crate::config::sanitize_name(&profile_name);
+    if profile_name.is_empty() {
+        return Err("整合包的 profileName 无效".to_string());
+    }
+    crate::tasks::push_task_log_pub(
+        app,
+        state,
+        task_id,
+        &format!(
+            "整合包 {} v{} → profile「{}」",
+            manifest.name, manifest.version, profile_name
+        ),
+    )
+    .await;
+
+    // 3. Materialize the profile directory.
+    let dest = crate::plugins::profile_dir_pub(&home, &profile_name);
+    if dest.exists() {
+        if !input.force {
+            return Err(format!("Profile「{profile_name}」已存在，勾选覆盖后重试"));
+        }
+        std::fs::remove_dir_all(&dest).map_err(|e| format!("清理旧 profile 失败: {e}"))?;
+    }
+    std::fs::create_dir_all(&dest).map_err(|e| format!("创建 profile 目录失败: {e}"))?;
+
+    let pkg = serde_json::json!({
+        "name": format!("dsh-profile-{profile_name}"),
+        "private": true,
+        "dependencies": manifest_pkg_deps(&manifest),
+        "dsh": { "profile": { "bundles": manifest.bundles } },
+    });
+    std::fs::write(
+        dest.join("package.json"),
+        serde_json::to_vec_pretty(&pkg).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("写入 package.json 失败: {e}"))?;
+    // Prefer the pack's own cordis.patch.yml; fall back to the manifest's
+    // inline patch (v3).
+    if let Ok(patch) = std::fs::read(unpacked.join("cordis.patch.yml")) {
+        std::fs::write(dest.join("cordis.patch.yml"), patch)
+            .map_err(|e| format!("写入 cordis.patch.yml 失败: {e}"))?;
+    } else if let Some(patch) = &manifest.patch {
+        std::fs::write(dest.join("cordis.patch.yml"), patch)
+            .map_err(|e| format!("写入 cordis.patch.yml 失败: {e}"))?;
+    }
+    let has_lock = unpacked.join("pnpm-lock.yaml").exists();
+    if has_lock {
+        std::fs::copy(unpacked.join("pnpm-lock.yaml"), dest.join("pnpm-lock.yaml"))
+            .map_err(|e| format!("写入 pnpm-lock.yaml 失败: {e}"))?;
+    }
+    if let Ok(ws) = std::fs::read(unpacked.join("pnpm-workspace.yaml")) {
+        std::fs::write(dest.join("pnpm-workspace.yaml"), ws)
+            .map_err(|e| format!("写入 pnpm-workspace.yaml 失败: {e}"))?;
+    }
+
+    // 4. Install dependencies. A shipped lockfile gets a frozen install
+    //    (exact pins); if pnpm rejects it as outdated relative to our
+    //    regenerated package.json, fall back to a normal install so the
+    //    import still succeeds.
+    let pnpm_prog = crate::tasks::ensure_pnpm_pub(app, state, task_id).await?;
+    let store_dir = state.data_dir.join(".pnpm-store");
+    let attempts: &[&[&str]] = if has_lock {
+        &[&["--frozen-lockfile"], &["--no-frozen-lockfile"]]
+    } else {
+        &[&["--no-frozen-lockfile"]]
+    };
+    let mut last_err = String::new();
+    for (i, extra) in attempts.iter().enumerate() {
+        if i > 0 {
+            crate::tasks::push_task_log_pub(
+                app,
+                state,
+                task_id,
+                "锁定文件与依赖清单不完全匹配，改用普通安装（锁定版本仍会被优先采用）…",
+            )
+            .await;
+        }
+        let mut cmd = tokio::process::Command::new(&pnpm_prog);
+        crate::process::hide_console(&mut cmd);
+        cmd.current_dir(&dest)
+            .arg("install")
+            .args(extra.iter().copied())
+            .arg("--store-dir")
+            .arg(&store_dir)
+            .args(["--loglevel=http"])
+            .args([
+                "--fetch-timeout",
+                "300000",
+                "--fetch-retries",
+                "5",
+                "--fetch-retry-maxtimeout",
+                "120000",
+                "--network-concurrency",
+                "4",
+            ]);
+        if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
+            let registry = registry.trim().to_string();
+            if !registry.is_empty() {
+                cmd.args(["--registry", &registry]);
+            }
+        }
+        cmd.env("CI", "true");
+        match crate::tasks::run_streamed_command(app, state, task_id, cmd, "pnpm install（整合包）")
+            .await
+        {
+            Ok(()) => {
+                last_err.clear();
+                break;
+            }
+            Err(e) => last_err = e,
+        }
+    }
+    if !last_err.is_empty() {
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(last_err);
+    }
+
+    crate::log_info!("整合包 {} 已导入到 {}", manifest.name, dest.display());
+    drop(guard);
+    Ok(profile_name)
+}
+
+/// Downloads a modpack URL to `target` with a size cap.
+async fn download_modpack(url: &str, target: &Path) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .user_agent("dsh-launcher")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("下载整合包失败 {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("下载整合包失败 {url}: HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取整合包失败: {e}"))?;
+    if bytes.len() > MODPACK_MAX_BYTES {
+        return Err("整合包过大（超过 64 MiB）".to_string());
+    }
+    std::fs::write(target, &bytes).map_err(|e| format!("保存整合包失败: {e}"))?;
+    Ok(())
+}
+
+/// Best-effort temp dir cleanup.
+struct TmpDir(PathBuf);
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_repo_from_spec_parses_common_forms() {
+        assert_eq!(
+            github_repo_from_spec("git+https://github.com/DViridescent/dafy-whale-theme.git"),
+            Some(("DViridescent/dafy-whale-theme".to_string(), None, None))
+        );
+        assert_eq!(
+            github_repo_from_spec("github:owner/repo#path:/packages/x"),
+            Some((
+                "owner/repo".to_string(),
+                Some("packages/x".to_string()),
+                None
+            ))
+        );
+        assert_eq!(
+            github_repo_from_spec("https://github.com/owner/repo#abc1234&path:sub/dir"),
+            Some((
+                "owner/repo".to_string(),
+                Some("sub/dir".to_string()),
+                Some("abc1234".to_string())
+            ))
+        );
+        assert_eq!(github_repo_from_spec("^1.2.3"), None);
+    }
+
+    #[test]
+    fn locked_git_commit_reads_importers() {
+        let lock = r#"
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      dafy-whale-theme:
+        specifier: github:DViridescent/dafy-whale-theme
+        version: github.com/DViridescent/dafy-whale-theme/99e8c57654f2c6394d515589a16b2a2a15c0a5f1
+"#;
+        assert_eq!(
+            locked_git_commit(lock, "dafy-whale-theme"),
+            Some("99e8c57654f2c6394d515589a16b2a2a15c0a5f1".to_string())
+        );
+        assert_eq!(locked_git_commit(lock, "missing"), None);
+    }
+
+    #[test]
+    fn manifest_pkg_deps_converts_v3_coords() {
+        let manifest = ModpackManifest {
+            manifest_version: 3,
+            name: "x".to_string(),
+            display_name: None,
+            version: "1.0.0".to_string(),
+            description: None,
+            author: None,
+            icon: None,
+            dsh_version: None,
+            profile_name: None,
+            bundles: vec![],
+            dependencies: BTreeMap::from([
+                ("github:owner/repo".to_string(), "abc1234".to_string()),
+                (
+                    "github:owner/mono#path:/pkg".to_string(),
+                    "def5678".to_string(),
+                ),
+                ("dsh-pet".to_string(), "0.2.0".to_string()),
+            ]),
+            patch: None,
+        };
+        let deps = manifest_pkg_deps(&manifest);
+        assert_eq!(deps["repo"], "github:owner/repo#abc1234");
+        assert_eq!(deps["pkg"], "github:owner/mono#def5678&path:pkg");
+        assert_eq!(deps["dsh-pet"], "0.2.0");
+    }
+
+    #[test]
+    fn tgz_round_trip() {
+        let dir = std::env::temp_dir().join(format!("dsh-modpack-test-{}", uuid::Uuid::new_v4()));
+        let files: Vec<(&str, Vec<u8>)> = vec![
+            ("manifest.json", b"{}".to_vec()),
+            ("package.json", b"{}".to_vec()),
+        ];
+        let tgz = write_modpack_tgz(&dir, "x-1.0.0.tgz", &files).unwrap();
+        let out = dir.join("out");
+        extract_modpack_tgz(&tgz, &out).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(out.join("manifest.json")).unwrap(),
+            "{}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

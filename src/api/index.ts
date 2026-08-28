@@ -8,6 +8,7 @@ import type {
   DshHome,
   DshInstance,
   DshVersion,
+  ExportModpackInput,
   InstallPluginInput,
   InstalledPlugin,
   InstanceStatus,
@@ -533,6 +534,12 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       // Browser preview: a real new tab is the expected behavior here.
       window.open(String(args?.url ?? ''), '_blank', 'noopener,noreferrer')
       return undefined as T
+    case 'export_modpack': {
+      const input = args?.input as { out_dir?: string; profile?: string } | undefined
+      return `${input?.out_dir ?? '.'}/${input?.profile ?? 'profile'}-1.0.0.tgz` as T
+    }
+    case 'start_import_modpack_task':
+      return 'task-mock-modpack' as T
     case 'list_instance_status':
       return Object.values(db.running) as T
     case 'check_instance_health':
@@ -768,6 +775,11 @@ export const api = {
     call<string>('rename_profile', { home_id: homeId, old_name: oldName, new_name: newName }),
   deleteProfile: (homeId: string, name: string) =>
     call<void>('delete_profile', { home_id: homeId, name }),
+  /** Exports a profile as a modpack .tgz; resolves to the written path. */
+  exportModpack: (input: ExportModpackInput) => call<string>('export_modpack', { input }),
+  /** Imports a modpack (.tgz path or URL) as a background task. */
+  startImportModpackTask: (homeId: string, source: string, force: boolean) =>
+    call<string>('start_import_modpack_task', { input: { home_id: homeId, source, force } }),
 
   startInstance: (id: string, profile: string) => call<void>('start_instance', { id, profile }),
   checkInstanceHealth: (instanceId: string, profile: string) =>
