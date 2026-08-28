@@ -1372,7 +1372,8 @@ async fn run_dsh_plugin(
 /// Reads the store a profile's `node_modules` is currently linked from, via
 /// the `storeDir` line pnpm records in `node_modules/.modules.yaml`.
 fn linked_store_dir(profile_dir: &std::path::Path) -> Option<String> {
-    let raw = std::fs::read_to_string(profile_dir.join("node_modules").join(".modules.yaml")).ok()?;
+    let raw =
+        std::fs::read_to_string(profile_dir.join("node_modules").join(".modules.yaml")).ok()?;
     for line in raw.lines() {
         if let Some(v) = line.trim().strip_prefix("storeDir:") {
             let v = v.trim().trim_matches('"').trim_matches('\'');
@@ -1439,7 +1440,14 @@ async fn relink_profile_store(
         &args,
         pnpm_prog,
     )?;
-    crate::tasks::run_streamed_command(app, state, task_id, cmd, "dsh plugin install（重新链接 store）").await
+    crate::tasks::run_streamed_command(
+        app,
+        state,
+        task_id,
+        cmd,
+        "dsh plugin install（重新链接 store）",
+    )
+    .await
 }
 
 /// Whether the task's streamed log mentions pnpm's ignored-build-scripts
@@ -1533,7 +1541,11 @@ fn dsh_plugin_command(
 /// The fetch/network flags only exist on download commands (`add` /
 /// `install`): `pnpm remove` rejects them outright ("Unknown options:
 /// 'fetch-timeout', …") and would fail before touching anything.
-fn forwarded_pnpm_flags(state: &State<'_, AppState>, loglevel: &str, subcommand: &str) -> Vec<String> {
+fn forwarded_pnpm_flags(
+    state: &State<'_, AppState>,
+    loglevel: &str,
+    subcommand: &str,
+) -> Vec<String> {
     let store_dir = state.data_dir.join(".pnpm-store");
     let mut args: Vec<String> = vec![
         "--store-dir".to_string(),
@@ -1798,10 +1810,7 @@ mod tests {
         let base = "C:\\Users\\x\\AppData\\Roaming\\in.dsh-plug.dsh-launcher\\.pnpm-store";
         // `.modules.yaml` records the versioned subdir pnpm derived from the
         // pinned base.
-        assert!(store_paths_match(
-            &format!("{base}\\v11"),
-            base
-        ));
+        assert!(store_paths_match(&format!("{base}\\v11"), base));
         // Forward slashes and a trailing separator are equivalent.
         assert!(store_paths_match(
             "C:/Users/x/AppData/Roaming/in.dsh-plug.dsh-launcher/.pnpm-store/v11/",
