@@ -143,7 +143,8 @@ struct AwesomeCatalog {
 
 /// Parses the `install` command line of an awesome-dsh-plugin entry into the
 /// launcher's plugin id: an npm package spec (`@scope/pkg`) or a GitHub spec
-/// (`github:owner/repo`). Returns None for anything we cannot drive.
+/// (`github:owner/repo`, optionally with `#path:<subdir>` for a plugin living
+/// in a monorepo subdirectory). Returns None for anything we cannot drive.
 ///
 /// The recognised shape is `dsh plugin --profile <name> add <target>` with
 /// arbitrary flags tolerated; `<target>` is taken verbatim, so a trailing
@@ -157,22 +158,63 @@ fn parse_awesome_install(install: &str) -> Option<String> {
         return None;
     }
     if let Some(rest) = target.strip_prefix("github:") {
-        let rest = rest.trim_end_matches(".git").trim_end_matches('/');
-        // Must be owner/repo with both parts present.
-        let mut parts = rest.split('/');
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some(o), Some(r), None) if !o.is_empty() && !r.is_empty() => {
-                Some(format!("github:{o}/{r}"))
+        let (repo, subpath) = parse_github_body(rest)?;
+        return Some(match subpath {
+            Some(p) => format!("github:{repo}#path:{p}"),
+            None => format!("github:{repo}"),
+        });
+    }
+    // npm target: a bare or scoped package name, optionally @version.
+    // Reject anything with a scheme/host (not a plain registry spec).
+    if target.contains("://") || target.contains(' ') {
+        return None;
+    }
+    Some(target.to_string())
+}
+
+/// Splits the body of a `github:` spec (`owner/repo`, optionally followed by
+/// `#path:<subdir>`) into its repo and subdirectory parts. Returns None when
+/// the repo part is not exactly `owner/repo`, or when the fragment is
+/// anything other than a `path:` — a committish is install-time state, not
+/// part of the plugin's identity.
+fn parse_github_body(body: &str) -> Option<(String, Option<String>)> {
+    let (repo, frag) = match body.split_once('#') {
+        Some((r, f)) => (r, Some(f)),
+        None => (body, None),
+    };
+    let repo = repo.trim_end_matches(".git").trim_end_matches('/');
+    // Must be owner/repo with both parts present.
+    let mut parts = repo.split('/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(o), Some(r), None) if !o.is_empty() && !r.is_empty() => {}
+        _ => return None,
+    }
+    let subpath = match frag {
+        None => None,
+        Some(f) => {
+            let p = f.strip_prefix("path:")?.trim_matches('/');
+            if p.is_empty() {
+                return None;
             }
-            _ => None,
+            Some(p.to_string())
         }
-    } else {
-        // npm target: a bare or scoped package name, optionally @version.
-        // Reject anything with a scheme/host (not a plain registry spec).
-        if target.contains("://") || target.contains(' ') {
-            return None;
-        }
-        Some(target.to_string())
+    };
+    Some((repo.to_string(), subpath))
+}
+
+/// Parses a launcher plugin id of the form `github:owner/repo` or
+/// `github:owner/repo#path:<subdir>` into (repo, subdir).
+fn parse_github_id(id: &str) -> Option<(String, Option<String>)> {
+    parse_github_body(id.strip_prefix("github:")?)
+}
+
+/// Builds the pnpm install spec for a git-hosted plugin: the repo at `git_ref`
+/// (a commit sha for alpha, a release tag for stable/beta), plus
+/// `&path:<subdir>` for monorepo plugins (pnpm splits the fragment on '&').
+fn github_install_spec(repo: &str, git_ref: &str, subpath: Option<&str>) -> String {
+    match subpath {
+        Some(p) => format!("github:{repo}#{git_ref}&path:{p}"),
+        None => format!("github:{repo}#{git_ref}"),
     }
 }
 
@@ -431,12 +473,8 @@ fn github_repo_of(plugin: &MarketPlugin) -> Option<String> {
             }
         }
     }
-    if let Some(rest) = plugin.id.strip_prefix("github:") {
-        return Some(
-            rest.trim_end_matches(".git")
-                .trim_end_matches('/')
-                .to_string(),
-        );
+    if let Some((repo, _subpath)) = parse_github_id(&plugin.id) {
+        return Some(repo);
     }
     None
 }
@@ -454,6 +492,12 @@ pub async fn fetch_plugin_versions(
 ) -> Result<PluginVersionPage, String> {
     match channel {
         PluginChannel::Stable | PluginChannel::Beta => {
+            // Git-hosted plugins have no npm registry entry; their release
+            // channels come from the repo's GitHub releases instead (stable
+            // = full releases, beta = prereleases).
+            if plugin_id.starts_with("github:") {
+                return github_release_versions(&plugin_id, &channel).await;
+            }
             let versions = npm_versions(&plugin_id, &channel).await?;
             Ok(PluginVersionPage {
                 versions,
@@ -462,6 +506,67 @@ pub async fn fetch_plugin_versions(
         }
         PluginChannel::Alpha => alpha_commit(&plugin_id, page.unwrap_or(1)).await,
     }
+}
+
+/// Fetches GitHub releases as versions for a `github:` plugin, newest first:
+/// stable keeps full releases, beta keeps prereleases. The release's tag name
+/// becomes the install ref; the channel's newest entry is the default.
+async fn github_release_versions(
+    plugin_id: &str,
+    channel: &PluginChannel,
+) -> Result<PluginVersionPage, String> {
+    let (repo, _subpath) = parse_github_id(plugin_id)
+        .ok_or_else(|| format!("无法解析 GitHub 插件 id: {plugin_id}"))?;
+    let url = github_api_url(&format!("/repos/{repo}/releases?per_page=30"));
+    let doc = fetch_json(&url, 4 * 1024 * 1024).await?;
+    let want_prerelease = matches!(channel, PluginChannel::Beta);
+    let mut out: Vec<PluginVersionInfo> = Vec::new();
+    if let Some(arr) = doc.as_array() {
+        for rel in arr {
+            if rel.get("draft").and_then(|v| v.as_bool()).unwrap_or(false) {
+                continue;
+            }
+            let prerelease = rel
+                .get("prerelease")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if prerelease != want_prerelease {
+                continue;
+            }
+            let tag = rel
+                .get("tag_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if tag.is_empty() {
+                continue;
+            }
+            let name = rel
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let date = rel.get("published_at").and_then(|v| v.as_str());
+            let label = match (name, date) {
+                (Some(n), Some(d)) => Some(format!("{d} · {n}")),
+                (Some(n), None) => Some(n.to_string()),
+                (None, Some(d)) => Some(d.to_string()),
+                _ => None,
+            };
+            out.push(PluginVersionInfo {
+                version: tag,
+                channel: channel.clone(),
+                label,
+                is_default: false,
+            });
+        }
+    }
+    if let Some(first) = out.first_mut() {
+        first.is_default = true;
+    }
+    Ok(PluginVersionPage {
+        versions: out,
+        has_more: false,
+    })
 }
 
 async fn npm_versions(
@@ -555,9 +660,16 @@ async fn alpha_commit(plugin_id: &str, page: u32) -> Result<PluginVersionPage, S
     let repo = github_repo_of(plugin)
         .ok_or_else(|| format!("插件 {plugin_id} 没有可用的 GitHub 仓库地址"))?;
 
+    // Monorepo plugins (`github:owner/repo#path:<subdir>`): restrict the
+    // commit list to commits touching the plugin's own directory.
+    let path_filter = parse_github_id(plugin_id)
+        .and_then(|(_, subpath)| subpath)
+        .map(|p| format!("&path={p}"))
+        .unwrap_or_default();
+
     const PER_PAGE: u32 = 30;
     let url = github_api_url(&format!(
-        "/repos/{repo}/commits?per_page={PER_PAGE}&page={page}"
+        "/repos/{repo}/commits?per_page={PER_PAGE}&page={page}{path_filter}"
     ));
     let doc = fetch_json(&url, 4 * 1024 * 1024).await?;
     let mut out: Vec<PluginVersionInfo> = Vec::new();
@@ -1089,20 +1201,24 @@ async fn do_install_plugin(
     let (home_path, version_dir) = resolve_instance(state, &input.instance_id)?;
     let dir = profile_dir(&home_path, &input.profile);
 
-    // Spec: npm packages use <pkg>@<version>; alpha (commit) installs from the
-    // GitHub repo tarball at that commit.
-    let spec = match input.channel {
-        PluginChannel::Alpha => {
-            let catalog = fetch_plugin_market(None).await?;
-            let plugin = catalog
-                .iter()
-                .find(|p| p.id == input.plugin_id)
-                .ok_or_else(|| format!("插件 {} 不在市场中", input.plugin_id))?;
-            let repo = github_repo_of(plugin)
-                .ok_or_else(|| format!("插件 {} 没有 GitHub 仓库", input.plugin_id))?;
-            format!("github:{repo}#{}", input.version)
-        }
-        _ => format!("{}@{}", input.plugin_id, input.version),
+    // Spec: npm packages use <pkg>@<version>; git-hosted (github:) plugins
+    // install the repo at a ref — a commit sha for alpha, a release tag for
+    // stable/beta — plus an optional `&path:<subdir>` for monorepo plugins.
+    let spec = match parse_github_id(&input.plugin_id) {
+        Some((repo, subpath)) => github_install_spec(&repo, &input.version, subpath.as_deref()),
+        None => match input.channel {
+            PluginChannel::Alpha => {
+                let catalog = fetch_plugin_market(None).await?;
+                let plugin = catalog
+                    .iter()
+                    .find(|p| p.id == input.plugin_id)
+                    .ok_or_else(|| format!("插件 {} 不在市场中", input.plugin_id))?;
+                let repo = github_repo_of(plugin)
+                    .ok_or_else(|| format!("插件 {} 没有 GitHub 仓库", input.plugin_id))?;
+                format!("github:{repo}#{}", input.version)
+            }
+            _ => format!("{}@{}", input.plugin_id, input.version),
+        },
     };
 
     crate::tasks::push_task_log_pub(
@@ -1163,14 +1279,49 @@ async fn do_install_plugin(
     )
     .await?;
 
-    // 2. Bundle registration is the CLI's job (reconciled from the installed
+    // 2. Resolve the real package name the plugin was recorded under. pnpm
+    //    keys dependencies by package name: for npm installs that IS the
+    //    plugin id, but for git-hosted installs the id is a `github:` spec
+    //    and the spec lands in the dependency VALUE. Every downstream id use
+    //    (bundles check, cordis mount row) needs the real name — mounting the
+    //    raw github: spec makes cordis import it as an ESM URL and the whole
+    //    profile fails to boot with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+    let installed_name = match resolve_installed_name(&dir, &input.plugin_id, &spec) {
+        Some(name) => {
+            if name != input.plugin_id {
+                crate::tasks::push_task_log_pub(
+                    app,
+                    state,
+                    task_id,
+                    &format!("插件已安装为包「{name}」"),
+                )
+                .await;
+            }
+            name
+        }
+        None => {
+            if input.plugin_id.starts_with("github:") {
+                // Boot safety: never mount an unresolved github: id.
+                let msg = format!(
+                    "无法在 package.json 中定位 {} 的已安装包名，跳过 cordis 挂载（请检查 profile）",
+                    input.plugin_id
+                );
+                crate::log_warn!("{msg}");
+                crate::tasks::push_task_log_pub(app, state, task_id, &msg).await;
+                return Ok(());
+            }
+            input.plugin_id.clone()
+        }
+    };
+
+    // 3. Bundle registration is the CLI's job (reconciled from the installed
     //    state). Read back its verdict: a package listed in
     //    dsh.profile.bundles is mounted as a profile layer, and adding a
     //    cordis.patch.yml insert row on top would mount it twice — the loader
-    //    then fails with `duplicate loader entry id`. Only a plain npm package
+    //    then fails with `duplicate loader entry id`. Only a plain package
     //    (no `dsh.bundle.patch`, so not reconciled into bundles) needs the
     //    explicit insert row.
-    if manifest_lists_bundle(&dir, &input.plugin_id)? {
+    if manifest_lists_bundle(&dir, &installed_name)? {
         crate::tasks::push_task_log_pub(
             app,
             state,
@@ -1179,7 +1330,7 @@ async fn do_install_plugin(
         )
         .await;
     } else {
-        ensure_cordis_insert(&dir, &input.plugin_id)?;
+        ensure_cordis_insert(&dir, &installed_name)?;
         crate::tasks::push_task_log_pub(
             app,
             state,
@@ -1201,6 +1352,41 @@ fn manifest_lists_bundle(profile_dir: &std::path::Path, plugin_id: &str) -> Resu
         .and_then(|b| b.as_array())
         .map(|arr| arr.iter().any(|b| b.as_str() == Some(plugin_id)))
         .unwrap_or(false))
+}
+
+/// Resolves the dependency key under which an install landed in the profile
+/// manifest: the real package name of the installed plugin. npm installs key
+/// by package name already; git-hosted installs record the `github:` spec as
+/// the dependency VALUE under the real name. Returns None when nothing in
+/// `dependencies` matches.
+fn resolve_installed_name(dir: &std::path::Path, plugin_id: &str, spec: &str) -> Option<String> {
+    let manifest = read_profile_manifest(dir).ok()?;
+    let deps = manifest.get("dependencies")?.as_object()?;
+    // pnpm records a git-hosted spec verbatim as the dependency value.
+    for (name, value) in deps {
+        if value.as_str() == Some(spec) {
+            return Some(name.clone());
+        }
+    }
+    // npm install: the key is the package name (the spec may carry @version).
+    let base = match plugin_id.rfind('@') {
+        Some(i) if i > 0 => &plugin_id[..i],
+        _ => plugin_id,
+    };
+    if deps.contains_key(base) {
+        return Some(base.to_string());
+    }
+    // The CLI/pnpm may normalise the recorded value; accept any value that
+    // starts with the github: repo part of the spec.
+    if let Some((repo, _)) = spec.split('#').next().and_then(parse_github_id) {
+        let prefix = format!("github:{repo}");
+        for (name, value) in deps {
+            if value.as_str().is_some_and(|v| v.starts_with(&prefix)) {
+                return Some(name.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Lock key for a profile directory. Windows filesystems are
@@ -1803,6 +1989,104 @@ mod tests {
             parse_awesome_install("dsh plugin --profile tui add @scope/x"),
             Some("@scope/x".to_string())
         );
+        // Monorepo subdir: `#path:/…` normalised (leading slash stripped).
+        assert_eq!(
+            parse_awesome_install(
+                "dsh plugin --profile web add github:ayahunter/dsh-trail#path:/packages/bundle"
+            ),
+            Some("github:ayahunter/dsh-trail#path:packages/bundle".to_string())
+        );
+        // Subdir without the leading slash is kept as-is.
+        assert_eq!(
+            parse_awesome_install(
+                "dsh plugin --profile web add github:DamonKoy/dsh-web-ui#path:packages/dsh-ssh"
+            ),
+            Some("github:DamonKoy/dsh-web-ui#path:packages/dsh-ssh".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_github_id_splits_repo_and_subpath() {
+        assert_eq!(
+            parse_github_id("github:2768651338/dsh-effort-slider"),
+            Some(("2768651338/dsh-effort-slider".to_string(), None))
+        );
+        assert_eq!(
+            parse_github_id("github:DamonKoy/dsh-web-ui#path:packages/dsh-task-board"),
+            Some((
+                "DamonKoy/dsh-web-ui".to_string(),
+                Some("packages/dsh-task-board".to_string())
+            ))
+        );
+        // Not github-shaped.
+        assert_eq!(parse_github_id("@dsh-plugin/dsh-loader"), None);
+        // A committish fragment is not identity — rejected.
+        assert_eq!(parse_github_id("github:o/r#main"), None);
+        assert_eq!(parse_github_id("github:o/r#path:"), None);
+        assert_eq!(parse_github_id("github:onlyowner"), None);
+    }
+
+    #[test]
+    fn github_install_spec_combines_ref_and_path() {
+        assert_eq!(
+            github_install_spec("o/r", "b95d997a", None),
+            "github:o/r#b95d997a"
+        );
+        assert_eq!(
+            github_install_spec("o/r", "v1.2.3", Some("packages/x")),
+            "github:o/r#v1.2.3&path:packages/x"
+        );
+    }
+
+    #[test]
+    fn resolve_installed_name_finds_real_package_name() {
+        let dir = std::env::temp_dir().join(format!("dsh-test-resolve-{}", new_id("t")));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{
+  "dependencies": {
+    "dsh-effort-slider": "github:2768651338/dsh-effort-slider#b95d997a",
+    "@dsh-plugin/dsh-loader": "1.3.2",
+    "dsh-task-board": "github:DamonKoy/dsh-web-ui#v0.3.0&path:packages/dsh-task-board"
+  }
+}"#,
+        )
+        .unwrap();
+        // git-hosted: spec recorded verbatim as the value.
+        assert_eq!(
+            resolve_installed_name(
+                &dir,
+                "github:2768651338/dsh-effort-slider",
+                "github:2768651338/dsh-effort-slider#b95d997a"
+            ),
+            Some("dsh-effort-slider".to_string())
+        );
+        // git-hosted monorepo with a normalised (non-verbatim) value: the
+        // github:owner/repo prefix still matches.
+        assert_eq!(
+            resolve_installed_name(
+                &dir,
+                "github:DamonKoy/dsh-web-ui#path:packages/dsh-task-board",
+                "github:DamonKoy/dsh-web-ui#deadbeef&path:packages/dsh-task-board"
+            ),
+            Some("dsh-task-board".to_string())
+        );
+        // npm: the id is the key; the spec carries @version.
+        assert_eq!(
+            resolve_installed_name(
+                &dir,
+                "@dsh-plugin/dsh-loader",
+                "@dsh-plugin/dsh-loader@1.3.2"
+            ),
+            Some("@dsh-plugin/dsh-loader".to_string())
+        );
+        // Nothing matches.
+        assert_eq!(
+            resolve_installed_name(&dir, "lodash", "lodash@4.17.21"),
+            None
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
