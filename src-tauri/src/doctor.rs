@@ -52,7 +52,8 @@ fn package_version(pkg_dir: &Path) -> Option<String> {
     doc.get("version")?.as_str().map(|s| s.to_string())
 }
 
-/// Version of the DSH CLI package inside an installed version tree.
+/// Version of the DSH CLI package inside an installed version tree. Source
+/// checkouts (GitHub-only tags) keep it at the workspace path.
 fn cli_core_version(version_dir: &Path) -> Option<String> {
     package_version(
         &version_dir
@@ -60,6 +61,7 @@ fn cli_core_version(version_dir: &Path) -> Option<String> {
             .join("@deepseek-ai")
             .join("dsh"),
     )
+    .or_else(|| package_version(&version_dir.join("apps").join("cli")))
 }
 
 /// Every `@deepseek-ai/*` package that has a copy inside the profile's

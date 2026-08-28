@@ -364,6 +364,12 @@ async fn fetch_json(url: &str, cap: usize) -> Result<serde_json::Value, String> 
     serde_json::from_slice(&bytes).map_err(|e| format!("解析 JSON 失败 {url}: {e}"))
 }
 
+/// `pub(crate)` so `commands.rs` (GitHub release tag listing) can reuse the
+/// same HTTP client and size cap.
+pub(crate) async fn fetch_json_pub(url: &str, cap: usize) -> Result<serde_json::Value, String> {
+    fetch_json(url, cap).await
+}
+
 // ---------------------------------------------------------------------------
 // Commands: catalog
 // ---------------------------------------------------------------------------

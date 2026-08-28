@@ -120,6 +120,8 @@ export interface TaskLog {
 export interface RemoteVersion {
   version: string
   released_at: string | null
+  /** 'github' = GitHub-only tag, installed by building from source. */
+  source?: 'npm' | 'github' | null
 }
 
 export interface NewInstanceInput {

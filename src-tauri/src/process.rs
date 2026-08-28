@@ -57,7 +57,25 @@ pub fn hide_console(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
+/// Whether a version directory is a source checkout (GitHub-only tags
+/// installed via clone + build) rather than an npm-installed package tree.
+/// The marker is the upstream monorepo's CLI package manifest.
+fn is_repo_checkout(version_dir: &std::path::Path) -> bool {
+    version_dir
+        .join("apps")
+        .join("cli")
+        .join("package.json")
+        .exists()
+}
+
 pub fn version_bin(version_dir: &std::path::Path) -> PathBuf {
+    if is_repo_checkout(version_dir) {
+        return version_dir
+            .join("apps")
+            .join("cli")
+            .join("lib")
+            .join("bin.js");
+    }
     version_dir
         .join("node_modules")
         .join("@deepseek-ai")
@@ -145,17 +163,29 @@ fn is_web_profile(home_path: &std::path::Path, profile: &str) -> bool {
 /// signal that survives pre-release version-number formats. The bundle lives
 /// under pnpm's store; we scan `node_modules/.pnpm/**/@deepseek-ai/dsh-web-app/lib/startup.js`.
 fn web_app_supports_no_open(version_dir: &std::path::Path) -> bool {
-    // The pnpm hoisted "public" store keeps one canonical copy with a stable
-    // path; the hashed `.pnpm/<name>@<ver>_<hash>` layout would need a scan.
-    let hoisted = version_dir
-        .join("node_modules")
-        .join(".pnpm")
-        .join("node_modules")
-        .join("@deepseek-ai")
-        .join("dsh-web-app")
-        .join("lib")
-        .join("startup.js");
-    let Ok(raw) = std::fs::read_to_string(&hoisted) else {
+    // Source checkouts keep the bundle at its workspace path; npm trees hoist
+    // one canonical copy into the pnpm public store.
+    let startup = if is_repo_checkout(version_dir) {
+        version_dir
+            .join("packages")
+            .join("bundle")
+            .join("web-app")
+            .join("lib")
+            .join("startup.js")
+    } else {
+        // The pnpm hoisted "public" store keeps one canonical copy with a
+        // stable path; the hashed `.pnpm/<name>@<ver>_<hash>` layout would
+        // need a scan.
+        version_dir
+            .join("node_modules")
+            .join(".pnpm")
+            .join("node_modules")
+            .join("@deepseek-ai")
+            .join("dsh-web-app")
+            .join("lib")
+            .join("startup.js")
+    };
+    let Ok(raw) = std::fs::read_to_string(&startup) else {
         return false;
     };
     raw.contains("--no-open") || raw.contains("no-open")
@@ -507,6 +537,51 @@ mod tests {
         std::fs::write(
             startup_dir.join("startup.js"),
             "const p = new Command().option('--no-open', 'do not open the Web UI in the default browser')",
+        )
+        .unwrap();
+        assert!(web_app_supports_no_open(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn version_bin_detects_source_checkout_layout() {
+        let dir = std::env::temp_dir().join(format!("dsh-proc-test-{}", uuid::Uuid::new_v4()));
+        // npm layout: node_modules/@deepseek-ai/dsh/lib/bin.js.
+        assert!(version_bin(&dir).ends_with(
+            std::path::Path::new("node_modules")
+                .join("@deepseek-ai")
+                .join("dsh")
+                .join("lib")
+                .join("bin.js")
+        ));
+        assert!(!version_bin_ready(&dir));
+        // Source checkout layout (GitHub-only tags): apps/cli/lib/bin.js.
+        let cli = dir.join("apps").join("cli");
+        std::fs::create_dir_all(cli.join("lib")).unwrap();
+        std::fs::write(cli.join("package.json"), r#"{"name":"@deepseek-ai/dsh"}"#).unwrap();
+        assert_eq!(version_bin(&dir), cli.join("lib").join("bin.js"));
+        assert!(!version_bin_ready(&dir));
+        std::fs::write(cli.join("lib").join("bin.js"), "// bin").unwrap();
+        assert!(version_bin_ready(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn web_app_no_open_detects_flag_in_source_checkout() {
+        let dir = std::env::temp_dir().join(format!("dsh-proc-test-{}", uuid::Uuid::new_v4()));
+        let cli = dir.join("apps").join("cli");
+        std::fs::create_dir_all(&cli).unwrap();
+        std::fs::write(cli.join("package.json"), r#"{"name":"@deepseek-ai/dsh"}"#).unwrap();
+        let lib = dir
+            .join("packages")
+            .join("bundle")
+            .join("web-app")
+            .join("lib");
+        assert!(!web_app_supports_no_open(&dir));
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(
+            lib.join("startup.js"),
+            "const p = new Command().option('--no-open', 'x')",
         )
         .unwrap();
         assert!(web_app_supports_no_open(&dir));

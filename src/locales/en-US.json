@@ -94,7 +94,9 @@
     "deleteVersion": "Delete",
     "confirmDeleteVersion": "Delete version {version}? Its install directory will be removed.",
     "versionDeleted": "Version {version} deleted",
-    "usedBy": "used by {count} instance(s)"
+    "usedBy": "used by {count} instance(s)",
+    "sourceBuildTag": "Source build",
+    "sourceBuildHint": "This version ships only on GitHub (not on npm). It will be cloned and built from source, which takes much longer (possibly ten minutes or more) — watch the task log."
   },
   "plugins": {
     "title": "Plugins",

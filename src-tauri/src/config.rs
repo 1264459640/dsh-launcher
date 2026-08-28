@@ -111,6 +111,11 @@ pub struct Config {
 pub struct RemoteVersion {
     pub version: String,
     pub released_at: Option<String>,
+    /// Where the version comes from: absent/`npm` installs from the registry;
+    /// `github` marks a GitHub-only tag (dsh-v*) that must be built from
+    /// source (clone + pnpm install + build).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

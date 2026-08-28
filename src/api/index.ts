@@ -187,6 +187,7 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       return db.versions as T
     case 'fetch_available_versions':
       return [
+        { version: '0.1.2-alpha.1', released_at: '2026-10-01T08:00:00Z', source: 'github' },
         { version: '0.1.0-rc.6', released_at: '2026-08-01T12:00:00Z' },
         { version: '0.1.0-rc.5', released_at: '2026-07-15T09:30:00Z' },
         { version: '0.1.0-rc.4', released_at: '2026-07-01T10:00:00Z' },

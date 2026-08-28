@@ -94,7 +94,9 @@
     "deleteVersion": "删除",
     "confirmDeleteVersion": "确定删除版本 {version}？其安装目录将被移除。",
     "versionDeleted": "版本 {version} 已删除",
-    "usedBy": "{count} 个实例引用"
+    "usedBy": "{count} 个实例引用",
+    "sourceBuildTag": "源码构建",
+    "sourceBuildHint": "该版本仅在 GitHub 发布（未发布到 npm），将从源码克隆并构建，耗时明显更长（可能需要十几分钟），请耐心等待任务日志。"
   },
   "plugins": {
     "title": "插件下载",

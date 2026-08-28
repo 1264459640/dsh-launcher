@@ -87,6 +87,9 @@ async function onRemove(id: string, version: string) {
           <div class="version-meta">
             <div class="version-name">
               {{ row.v.version }}
+              <a-tag v-if="row.v.source === 'github'" size="small" color="orange">
+                {{ t('download.sourceBuildTag') }}
+              </a-tag>
               <a-tag v-if="installedSet.has(row.v.version)" size="small" color="green">
                 {{ t('download.installedTag') }}
               </a-tag>
@@ -110,6 +113,9 @@ async function onRemove(id: string, version: string) {
             <div class="version-meta">
               <div class="version-name">
                 {{ v.version }}
+                <a-tag v-if="v.source === 'github'" size="small" color="orange">
+                  {{ t('download.sourceBuildTag') }}
+                </a-tag>
                 <a-tag v-if="installedSet.has(v.version)" size="small" color="green">
                   {{ t('download.installedTag') }}
                 </a-tag>
@@ -128,6 +134,9 @@ async function onRemove(id: string, version: string) {
             <div class="version-meta">
               <div class="version-name">
                 {{ v.version }}
+                <a-tag v-if="v.source === 'github'" size="small" color="orange">
+                  {{ t('download.sourceBuildTag') }}
+                </a-tag>
                 <a-tag v-if="installedSet.has(v.version)" size="small" color="green">
                   {{ t('download.installedTag') }}
                 </a-tag>

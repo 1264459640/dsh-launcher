@@ -13,6 +13,11 @@ const store = useLauncherStore()
 
 const version = computed(() => String(route.params.version ?? ''))
 const installedVersion = computed(() => store.versions.find((v) => v.version === version.value))
+const isSourceBuild = computed(
+  () =>
+    !installedVersion.value &&
+    store.remoteVersions.some((v) => v.version === version.value && v.source === 'github'),
+)
 
 // Default instance name: version string, deduplicated against existing names.
 function suggestName(): string {
@@ -110,6 +115,9 @@ async function onConfirm() {
 
     <!-- Action -->
     <div class="confirm-area">
+      <a-alert v-if="isSourceBuild" type="warning" class="confirm-hint">
+        {{ t('download.sourceBuildHint') }}
+      </a-alert>
       <a-alert v-if="installedVersion" type="info" class="confirm-hint">
         {{ t('download.alreadyInstalled') }}
       </a-alert>

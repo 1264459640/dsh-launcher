@@ -513,6 +513,24 @@ async fn install_version_streamed(
     task_id: &str,
     version: &str,
 ) -> Result<DshVersion, String> {
+    // Alpha builds ship only as GitHub `dsh-v*` tags, never to npm; route
+    // those to the from-source pipeline before touching the version dir.
+    if !npm_has_version(version).await {
+        push_task_log(
+            app,
+            state,
+            task_id,
+            &format!("@deepseek-ai/dsh@{version} 未发布到 npm，检查 GitHub 标签 dsh-v{version}…"),
+        )
+        .await;
+        if !github_tag_exists(version).await? {
+            return Err(format!(
+                "版本 {version} 既未发布到 npm，也不存在 GitHub 标签 dsh-v{version}"
+            ));
+        }
+        return install_version_from_repo(app, state, task_id, version).await;
+    }
+
     let dir = state.data_dir.join("versions").join(version);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建版本目录失败: {e}"))?;
     let store_dir = state.data_dir.join(".pnpm-store");
@@ -586,6 +604,16 @@ async fn install_version_streamed(
         }
     }
 
+    register_version(state, version, dir)
+}
+
+/// Records an installed version in the config (idempotent by version
+/// string).
+fn register_version(
+    state: &State<'_, AppState>,
+    version: &str,
+    dir: std::path::PathBuf,
+) -> Result<DshVersion, String> {
     let record = DshVersion {
         id: new_id("v"),
         version: version.to_string(),
@@ -598,6 +626,147 @@ async fn install_version_streamed(
     cfg.versions.push(record.clone());
     crate::commands::save_state(state, &cfg)?;
     Ok(record)
+}
+
+/// Whether `@deepseek-ai/dsh@<version>` exists on the npm registry. Network
+/// or npm failures keep the classic npm path so its own error surfaces.
+async fn npm_has_version(version: &str) -> bool {
+    let mut cmd = tokio::process::Command::new(crate::process::npm());
+    crate::process::hide_console(&mut cmd);
+    cmd.args(["view", &format!("@deepseek-ai/dsh@{version}"), "version"]);
+    if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
+        let registry = registry.trim().to_string();
+        if !registry.is_empty() {
+            cmd.args(["--registry", &registry]);
+        }
+    }
+    // An unknown version exits 0 with empty output.
+    match cmd.output().await {
+        Ok(out) => out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        Err(_) => true,
+    }
+}
+
+/// Whether the upstream repo carries the `dsh-v<version>` tag (GitHub-only
+/// alpha builds).
+async fn github_tag_exists(version: &str) -> Result<bool, String> {
+    let url = crate::plugins::github_api_url(&format!(
+        "/repos/{}/git/ref/tags/dsh-v{version}",
+        crate::commands::DSH_REPO
+    ));
+    match crate::plugins::fetch_json_pub(&url, 256 * 1024).await {
+        Ok(_) => Ok(true),
+        Err(e) if e.contains("HTTP 404") => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Installs a GitHub-only version (a `dsh-v<ver>` tag never published to
+/// npm) from source, following the upstream README "Run from source" flow:
+/// clone the tag → `pnpm install` → `pnpm run build`. The version directory
+/// IS the checkout, so the CLI entry is `apps/cli/lib/bin.js` (see
+/// `crate::process::version_bin`). This takes much longer than an npm
+/// install: a full monorepo dependency install plus a full build.
+async fn install_version_from_repo(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+    version: &str,
+) -> Result<DshVersion, String> {
+    let dir = state.data_dir.join("versions").join(version);
+    let tag = format!("dsh-v{version}");
+    let repo_url = format!("https://github.com/{}.git", crate::commands::DSH_REPO);
+    let store_dir = state.data_dir.join(".pnpm-store");
+
+    // 1. Clone the tag. A kept checkout is reused as-is (tags are immutable);
+    //    any other leftover directory is a failed attempt and gets cleared.
+    if !dir.join("apps").join("cli").join("package.json").exists() {
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(|e| format!("清理残留源码目录失败: {e}"))?;
+        }
+        push_task_log(
+            app,
+            state,
+            task_id,
+            &format!("该版本仅发布在 GitHub，正在克隆 {tag} 源码（浅克隆）…"),
+        )
+        .await;
+        let mut cmd = tokio::process::Command::new("git");
+        crate::process::hide_console(&mut cmd);
+        cmd.args(["clone", "--depth", "1", "--branch", &tag, &repo_url])
+            .arg(&dir)
+            // Never prompt for credentials on a public repo.
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("CI", "true");
+        run_streamed_command(app, state, task_id, cmd, "git clone")
+            .await
+            .map_err(|e| {
+                if e.contains("程序") || e.contains("program") || e.contains("not found") {
+                    format!("源码构建需要安装 Git：{e}")
+                } else {
+                    e
+                }
+            })?;
+    } else {
+        push_task_log(app, state, task_id, "复用已克隆的源码目录").await;
+    }
+
+    let pnpm_prog = ensure_pnpm(app, state, task_id).await?;
+
+    // 2. Dependencies. The checkout manages its own workspace manifest
+    //    (including build-script policy), so the launcher's allowBuilds
+    //    workaround does not apply here.
+    push_task_log(
+        app,
+        state,
+        task_id,
+        "安装依赖（pnpm install --frozen-lockfile），首次可能需要几分钟…",
+    )
+    .await;
+    let mut cmd = tokio::process::Command::new(&pnpm_prog);
+    crate::process::hide_console(&mut cmd);
+    cmd.current_dir(&dir)
+        .args(["install", "--frozen-lockfile"])
+        .arg("--store-dir")
+        .arg(&store_dir)
+        .args(["--loglevel=http"])
+        .args([
+            "--fetch-timeout",
+            "300000",
+            "--fetch-retries",
+            "5",
+            "--fetch-retry-maxtimeout",
+            "120000",
+            "--network-concurrency",
+            "4",
+        ]);
+    if let Ok(registry) = std::env::var("DSH_NPM_REGISTRY") {
+        let registry = registry.trim().to_string();
+        if !registry.is_empty() {
+            cmd.args(["--registry", &registry]);
+        }
+    }
+    cmd.env("CI", "true");
+    run_streamed_command(app, state, task_id, cmd, "pnpm install（源码）").await?;
+
+    // 3. Build. Per the upstream README, `pnpm run build` prepares every
+    //    repository artifact; `pnpm dsh web` then runs without rebuilding.
+    push_task_log(app, state, task_id, "构建（pnpm run build）…").await;
+    let mut cmd = tokio::process::Command::new(&pnpm_prog);
+    crate::process::hide_console(&mut cmd);
+    cmd.current_dir(&dir)
+        .args(["run", "build"])
+        .env("CI", "true");
+    run_streamed_command(app, state, task_id, cmd, "pnpm run build").await?;
+
+    // 4. Verify and register.
+    if !crate::process::version_bin_ready(&dir) {
+        return Err(format!(
+            "构建完成后未找到 CLI 入口 {}，请查看任务日志中的构建输出",
+            crate::process::version_bin(&dir).display()
+        ));
+    }
+    register_version(state, version, dir)
 }
 
 /// Whether the task's streamed log mentions pnpm's ignored-build-scripts

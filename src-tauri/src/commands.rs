@@ -100,7 +100,9 @@ pub fn list_versions(state: State<'_, AppState>) -> Result<Vec<DshVersion>, Stri
 }
 
 /// Queries the npm registry for available @deepseek-ai/dsh versions with
-/// their publish dates.
+/// their publish dates, then merges in GitHub-only `dsh-v*` release tags
+/// (alpha builds are tagged on GitHub but not published to npm) marked with
+/// `source: "github"`.
 #[tauri::command]
 pub async fn fetch_available_versions() -> Result<Vec<RemoteVersion>, String> {
     let versions_json = run_npm_view("@deepseek-ai/dsh", "versions").await?;
@@ -130,6 +132,58 @@ pub async fn fetch_available_versions() -> Result<Vec<RemoteVersion>, String> {
         out.push(RemoteVersion {
             version: v,
             released_at,
+            source: None,
+        });
+    }
+
+    // GitHub-only tags (e.g. dsh-v0.1.2-alpha.1). A release listing failure
+    // never aborts the npm listing.
+    match fetch_github_tag_versions().await {
+        Ok(git_versions) => {
+            for gv in git_versions {
+                if out.iter().any(|r| r.version == gv.version) {
+                    continue;
+                }
+                out.push(gv);
+            }
+        }
+        Err(e) => crate::log_warn!("获取 GitHub dsh-v* 标签失败，忽略: {e}"),
+    }
+    Ok(out)
+}
+
+/// Upstream repo whose `dsh-v<version>` tags carry releases.
+pub(crate) const DSH_REPO: &str = "deepseek-ai/deepseek-harness";
+
+/// Versions tagged on GitHub as `dsh-v*` releases (whether or not they were
+/// later published to npm — dedup happens at the caller).
+async fn fetch_github_tag_versions() -> Result<Vec<RemoteVersion>, String> {
+    let url = crate::plugins::github_api_url(&format!("/repos/{DSH_REPO}/releases?per_page=100"));
+    let doc = crate::plugins::fetch_json_pub(&url, 8 * 1024 * 1024).await?;
+    let mut out = Vec::new();
+    let Some(arr) = doc.as_array() else {
+        return Ok(out);
+    };
+    for rel in arr {
+        if rel.get("draft").and_then(|v| v.as_bool()).unwrap_or(false) {
+            continue;
+        }
+        let Some(tag) = rel.get("tag_name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(version) = tag.strip_prefix("dsh-v") else {
+            continue;
+        };
+        if version.is_empty() {
+            continue;
+        }
+        out.push(RemoteVersion {
+            version: version.to_string(),
+            released_at: rel
+                .get("published_at")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            source: Some("github".to_string()),
         });
     }
     Ok(out)
