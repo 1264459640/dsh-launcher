@@ -529,6 +529,10 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       // window.open here so the browser never navigates to a profile page.
       return undefined as T
     }
+    case 'open_external':
+      // Browser preview: a real new tab is the expected behavior here.
+      window.open(String(args?.url ?? ''), '_blank', 'noopener,noreferrer')
+      return undefined as T
     case 'list_instance_status':
       return Object.values(db.running) as T
     case 'check_instance_health':
@@ -770,6 +774,8 @@ export const api = {
     call<DoctorReport>('check_instance_health', { instance_id: instanceId, profile }),
   stopInstance: (id: string) => call<void>('stop_instance', { id }),
   openInstanceWindow: (id: string) => call<void>('open_instance_window', { id }),
+  /** Opens an external http(s) URL in the system browser. */
+  openExternal: (url: string) => call<void>('open_external', { url }),
   listInstanceStatus: () => call<InstanceStatus[]>('list_instance_status'),
 
   getSettings: () => call<LauncherSettings>('get_settings'),

@@ -125,6 +125,7 @@ pub fn run() {
             commands::check_instance_health,
             commands::list_instance_status,
             commands::open_instance_window,
+            commands::open_external,
             commands::get_settings,
             commands::update_settings,
             commands::fetch_news,

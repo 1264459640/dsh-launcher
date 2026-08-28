@@ -813,6 +813,22 @@ pub fn update_settings(
 }
 
 // ---------------------------------------------------------------------------
+// External links
+// ---------------------------------------------------------------------------
+
+/// Opens an http(s) URL in the system browser. The Tauri webview ignores
+/// `target="_blank"` anchors, so external links must go through here.
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), String> {
+    let url = url.trim().to_string();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(format!("仅允许打开 http(s) 链接: {url}"));
+    }
+    crate::log_info!("在系统浏览器打开 {url}");
+    open::that(&url).map_err(|e| format!("打开链接失败: {e}"))
+}
+
+// ---------------------------------------------------------------------------
 // News feed
 // ---------------------------------------------------------------------------
 

@@ -221,9 +221,9 @@ const homeColumns = computed(() => [
         <a-alert type="info" :show-icon="true">
           {{ t('settings.update.available', { version: updateInfo.latest }) }}
           <template v-if="updateInfo.url">
-            <a :href="updateInfo.url" target="_blank" rel="noopener noreferrer" class="update-link">
+            <a-link class="update-link" @click="api.openExternal(updateInfo.url!)">
               {{ t('settings.update.viewRelease') }}
-            </a>
+            </a-link>
           </template>
         </a-alert>
       </div>

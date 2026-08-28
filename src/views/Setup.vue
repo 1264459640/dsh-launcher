@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
+import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
 
 const router = useRouter()
@@ -61,7 +62,7 @@ async function recheck() {
           <li>{{ t('setup.nodeStep2') }}</li>
           <li>{{ t('setup.nodeStep3') }}</li>
         </ol>
-        <a-button type="primary" href="https://nodejs.org/zh-cn/download" target="_blank">
+        <a-button type="primary" @click="api.openExternal('https://nodejs.org/zh-cn/download')">
           {{ t('setup.openNodeSite') }}
         </a-button>
       </div>
