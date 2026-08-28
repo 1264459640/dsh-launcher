@@ -1314,6 +1314,28 @@ async fn run_dsh_plugin(
     let pnpm_prog = ensure_pnpm_for_plugins(app, state, task_id).await?;
     let what = format!("dsh plugin {subcommand}");
 
+    // A node_modules tree linked from a *different* pnpm store (e.g. the
+    // profile was first populated by a manual `dsh plugin` run that used the
+    // user's global store) makes every pnpm op fail with
+    // ERR_PNPM_UNEXPECTED_STORE. Detect the mismatch up front — with
+    // `--loglevel=warn` (removals) pnpm prints nothing the log matcher could
+    // catch, so the log-based retry below would never fire — and relink.
+    let store_dir = state.data_dir.join(".pnpm-store");
+    if let Some(linked) = linked_store_dir(&dir) {
+        if !store_paths_match(&linked, &store_dir.to_string_lossy()) {
+            crate::tasks::push_task_log_pub(
+                app,
+                state,
+                task_id,
+                &format!(
+                    "node_modules 链接自其他 pnpm store（{linked}），按 pnpm 提示重新链接后重试…"
+                ),
+            )
+            .await;
+            relink_profile_store(app, state, task_id, target, &pnpm_prog).await?;
+        }
+    }
+
     for attempt in 1..=2 {
         let mut args: Vec<String> = vec![subcommand.to_string(), spec.to_string()];
         args.extend(forwarded_pnpm_flags(state, loglevel));
@@ -1331,10 +1353,93 @@ async fn run_dsh_plugin(
                 .await;
                 ensure_build_scripts_allowed(&dir)?;
             }
+            Err(_e) if attempt == 1 && task_log_mentions_unexpected_store(state, task_id) => {
+                crate::tasks::push_task_log_pub(
+                    app,
+                    state,
+                    task_id,
+                    "pnpm 报告 store 位置不一致，正在重新链接 node_modules 后重试…",
+                )
+                .await;
+                relink_profile_store(app, state, task_id, target, &pnpm_prog).await?;
+            }
             Err(e) => return Err(e),
         }
     }
     unreachable!("attempt loop covers both attempts")
+}
+
+/// Reads the store a profile's `node_modules` is currently linked from, via
+/// the `storeDir` line pnpm records in `node_modules/.modules.yaml`.
+fn linked_store_dir(profile_dir: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(profile_dir.join("node_modules").join(".modules.yaml")).ok()?;
+    for line in raw.lines() {
+        if let Some(v) = line.trim().strip_prefix("storeDir:") {
+            let v = v.trim().trim_matches('"').trim_matches('\'');
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Whether two store paths point at the same store. pnpm records the
+/// versioned subdirectory (`<store>/v11`) while the launcher pins the base
+/// dir, so a path containing the other as a prefix also counts as a match.
+/// Windows filesystems are case-insensitive and pnpm may emit either slash.
+fn store_paths_match(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        let s = s.replace('/', "\\");
+        let s = s.trim_end_matches('\\');
+        if cfg!(windows) {
+            s.to_lowercase()
+        } else {
+            s.to_string()
+        }
+    };
+    let (a, b) = (norm(a), norm(b));
+    a == b || a.starts_with(&format!("{b}\\")) || b.starts_with(&format!("{a}\\"))
+}
+
+/// Whether the task's streamed log mentions pnpm's unexpected-store failure
+/// (ERR_PNPM_UNEXPECTED_STORE / "Unexpected store location"). Fallback for
+/// the proactive `linked_store_dir` check, which only covers stores pnpm
+/// recorded in `.modules.yaml`.
+fn task_log_mentions_unexpected_store(state: &State<'_, AppState>, task_id: &str) -> bool {
+    let tasks = state.tasks.try_lock().map(|t| t.clone()).ok();
+    tasks
+        .and_then(|t| t.get(task_id).map(|t| t.logs.clone()))
+        .map(|logs| {
+            logs.iter().any(|l| {
+                l.contains("ERR_PNPM_UNEXPECTED_STORE") || l.contains("Unexpected store location")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Relinks a profile's `node_modules` onto the launcher's pinned store.
+/// pnpm's own remedy for ERR_PNPM_UNEXPECTED_STORE is a plain reinstall,
+/// which re-imports the lockfile packages from the new store without
+/// touching package.json; routing it through `dsh plugin install` keeps the
+/// CLI's bundle reconciliation in the loop.
+async fn relink_profile_store(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+    target: &PluginCliTarget<'_>,
+    pnpm_prog: &std::path::Path,
+) -> Result<(), String> {
+    let mut args: Vec<String> = vec!["install".to_string()];
+    args.extend(forwarded_pnpm_flags(state, "warn"));
+    let cmd = dsh_plugin_command(
+        target.version_dir,
+        target.home_path,
+        target.profile,
+        &args,
+        pnpm_prog,
+    )?;
+    crate::tasks::run_streamed_command(app, state, task_id, cmd, "dsh plugin install（重新链接 store）").await
 }
 
 /// Whether the task's streamed log mentions pnpm's ignored-build-scripts
@@ -1673,6 +1778,46 @@ mod tests {
             parse_awesome_install("dsh plugin --profile tui add @scope/x"),
             Some("@scope/x".to_string())
         );
+    }
+
+    #[test]
+    fn store_paths_match_handles_versioned_subdir_and_slashes() {
+        let base = "C:\\Users\\x\\AppData\\Roaming\\in.dsh-plug.dsh-launcher\\.pnpm-store";
+        // `.modules.yaml` records the versioned subdir pnpm derived from the
+        // pinned base.
+        assert!(store_paths_match(
+            &format!("{base}\\v11"),
+            base
+        ));
+        // Forward slashes and a trailing separator are equivalent.
+        assert!(store_paths_match(
+            "C:/Users/x/AppData/Roaming/in.dsh-plug.dsh-launcher/.pnpm-store/v11/",
+            base
+        ));
+        // A genuinely different store (the user's global one) mismatches.
+        assert!(!store_paths_match(
+            "C:\\Users\\x\\AppData\\Local\\pnpm\\store\\v11",
+            base
+        ));
+    }
+
+    #[test]
+    fn linked_store_dir_reads_modules_yaml() {
+        let dir = std::env::temp_dir().join(format!("dsh-test-modules-{}", new_id("t")));
+        let nm = dir.join("node_modules");
+        std::fs::create_dir_all(&nm).unwrap();
+        std::fs::write(
+            nm.join(".modules.yaml"),
+            "hoist: true\nstoreDir: C:\\Users\\x\\AppData\\Local\\pnpm\\store\\v11\nvirtualStoreDir: ...\n",
+        )
+        .unwrap();
+        assert_eq!(
+            linked_store_dir(&dir).as_deref(),
+            Some("C:\\Users\\x\\AppData\\Local\\pnpm\\store\\v11")
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        // Missing file → None (fresh profile, nothing to relink).
+        assert_eq!(linked_store_dir(&dir), None);
     }
 
     #[test]
