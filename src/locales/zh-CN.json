@@ -99,6 +99,7 @@
   "plugins": {
     "title": "插件下载",
     "searchPlaceholder": "搜索插件（名称 / 描述）",
+    "sourceAll": "全部来源",
     "refresh": "刷新市场",
     "empty": "暂无插件",
     "noMatch": "没有匹配的插件",

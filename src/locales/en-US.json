@@ -99,6 +99,7 @@
   "plugins": {
     "title": "Plugins",
     "searchPlaceholder": "Search plugins (name / description)",
+    "sourceAll": "All sources",
     "refresh": "Refresh market",
     "empty": "No plugins",
     "noMatch": "No matching plugins",

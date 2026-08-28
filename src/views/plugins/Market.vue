@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useLauncherStore } from '@/stores/launcher'
 import { api } from '@/api'
-import type { MarketPlugin } from '@/api/types'
+import type { MarketPlugin, PluginSource } from '@/api/types'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -12,6 +12,8 @@ const store = useLauncherStore()
 
 const search = ref('')
 const error = ref<string | null>(null)
+/** '' means "all sources". */
+const sourceFilter = ref<'' | PluginSource>('')
 
 function pickDescription(p: MarketPlugin): string {
   const d = p.description
@@ -21,10 +23,19 @@ function pickDescription(p: MarketPlugin): string {
   return (zh ?? d[0])?.content ?? ''
 }
 
+/** Source of an entry; absent on old payloads means the primary catalog. */
+function sourceOf(p: MarketPlugin): PluginSource {
+  return p.source ?? 'dsh-plugins'
+}
+
 const filtered = computed(() => {
+  let list = store.marketPlugins
+  if (sourceFilter.value) {
+    list = list.filter((p) => sourceOf(p) === sourceFilter.value)
+  }
   const q = search.value.trim().toLowerCase()
-  if (!q) return store.marketPlugins
-  return store.marketPlugins.filter((p) => {
+  if (!q) return list
+  return list.filter((p) => {
     const desc = pickDescription(p).toLowerCase()
     return p.id.toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || desc.includes(q)
   })
@@ -71,6 +82,11 @@ onMounted(() => {
       <div class="dl-card-title">
         <h3>{{ t('plugins.title') }}</h3>
         <a-space>
+          <a-select v-model="sourceFilter" class="source-select" size="small">
+            <a-option value="">{{ t('plugins.sourceAll') }}</a-option>
+            <a-option value="dsh-plugins">dsh-plugins</a-option>
+            <a-option value="awesome-dsh-plugin">awesome-dsh-plugin</a-option>
+          </a-select>
           <a-input
             v-model="search"
             :placeholder="t('plugins.searchPlaceholder')"
@@ -110,6 +126,9 @@ onMounted(() => {
             <div class="plugin-name">
               {{ p.name }}
               <span class="plugin-id">{{ p.id }}</span>
+              <a-tag v-if="sourceOf(p) === 'awesome-dsh-plugin'" size="small" color="purple">
+                awesome
+              </a-tag>
             </div>
             <div class="plugin-desc">{{ pickDescription(p) }}</div>
             <div v-if="relationships(p).length" class="plugin-rel">
@@ -141,6 +160,10 @@ onMounted(() => {
 
 .search-input {
   width: 260px;
+}
+
+.source-select {
+  width: 190px;
 }
 
 .market-error {

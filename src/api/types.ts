@@ -158,6 +158,9 @@ export interface MarketPluginRelationship {
   versions: string
 }
 
+/** Which catalog a market entry came from (serialised kebab-case). */
+export type PluginSource = 'dsh-plugins' | 'awesome-dsh-plugin'
+
 export interface MarketPlugin {
   id: string
   name: string
@@ -165,6 +168,12 @@ export interface MarketPlugin {
   support_versions?: unknown
   urls?: MarketPluginUrls
   relationship?: MarketPluginRelationship[]
+  /** Absent on old payloads: treated as the primary dsh-plugins catalog. */
+  source?: PluginSource
+  /** Community-catalog extras. */
+  category?: string
+  stars?: number
+  downloads?: number
 }
 
 export type PluginChannel = 'stable' | 'beta' | 'alpha'

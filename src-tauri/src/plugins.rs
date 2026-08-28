@@ -9,6 +9,9 @@ use tauri::{AppHandle, Manager, State};
 
 /// Market API endpoint (dsh-plugins.github.io publishes to the custom domain).
 const MARKET_URL: &str = "https://dsh-plug.in/api/plugins.json";
+/// The community catalog (awesome-dsh-plugin.com), a different schema keyed by
+/// an `install` command line; see `parse_awesome_install`.
+const AWESOME_URL: &str = "https://awesome-dsh-plugin.com/plugins.json";
 const NPM_REGISTRY: &str = "https://registry.npmjs.org";
 
 /// Public OAuth App client id used to boost unauthenticated GitHub API quota
@@ -73,6 +76,147 @@ pub struct MarketPlugin {
     pub urls: Option<MarketPluginUrls>,
     #[serde(default)]
     pub relationship: Option<Vec<MarketPluginRelationship>>,
+    /// Which catalog this entry came from. Defaults to the primary dsh-plug.in
+    /// catalog so old cached/frontend payloads without the field stay valid.
+    #[serde(default)]
+    pub source: PluginSource,
+    /// Community-catalog extras (absent for the primary catalog).
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub stars: Option<u64>,
+    #[serde(default)]
+    pub downloads: Option<u64>,
+}
+
+/// Which catalog a market entry came from. Serialised lowercase so the
+/// frontend filter can match on the string.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginSource {
+    /// The primary catalog at dsh-plug.in (official, listed first).
+    #[default]
+    DshPlugins,
+    /// The community catalog at awesome-dsh-plugin.com.
+    AwesomeDshPlugin,
+}
+
+// ---------------------------------------------------------------------------
+// Community catalog (awesome-dsh-plugin.com)
+// ---------------------------------------------------------------------------
+
+/// One entry in the awesome-dsh-plugin catalog. Only the fields the launcher
+/// consumes are modelled; the rest (page/url/added/…) are ignored.
+#[derive(Clone, Debug, Deserialize)]
+struct AwesomePlugin {
+    name: String,
+    #[serde(default)]
+    url: Option<String>,
+    /// Bilingual description { en, zh }.
+    #[serde(default)]
+    description: Option<AwesomeDescription>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    stars: Option<u64>,
+    #[serde(default)]
+    downloads: Option<u64>,
+    /// The install command line, e.g.
+    /// `dsh plugin --profile web add @scope/pkg` (npm) or
+    /// `dsh plugin --profile web add github:owner/repo` (GitHub).
+    install: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct AwesomeDescription {
+    #[serde(default)]
+    en: Option<String>,
+    #[serde(default)]
+    zh: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct AwesomeCatalog {
+    #[serde(default)]
+    plugins: Vec<AwesomePlugin>,
+}
+
+/// Parses the `install` command line of an awesome-dsh-plugin entry into the
+/// launcher's plugin id: an npm package spec (`@scope/pkg`) or a GitHub spec
+/// (`github:owner/repo`). Returns None for anything we cannot drive.
+///
+/// The recognised shape is `dsh plugin --profile <name> add <target>` with
+/// arbitrary flags tolerated; `<target>` is taken verbatim, so a trailing
+/// `@version` on an npm target is kept (the version resolver splits it later).
+fn parse_awesome_install(install: &str) -> Option<String> {
+    let tokens: Vec<&str> = install.split_whitespace().collect();
+    // Find the `add` subcommand; the install target is the next token.
+    let pos = tokens.iter().position(|t| *t == "add")?;
+    let target = tokens.get(pos + 1)?.trim();
+    if target.is_empty() {
+        return None;
+    }
+    if let Some(rest) = target.strip_prefix("github:") {
+        let rest = rest.trim_end_matches(".git").trim_end_matches('/');
+        // Must be owner/repo with both parts present.
+        let mut parts = rest.split('/');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(o), Some(r), None) if !o.is_empty() && !r.is_empty() => {
+                Some(format!("github:{o}/{r}"))
+            }
+            _ => None,
+        }
+    } else {
+        // npm target: a bare or scoped package name, optionally @version.
+        // Reject anything with a scheme/host (not a plain registry spec).
+        if target.contains("://") || target.contains(' ') {
+            return None;
+        }
+        Some(target.to_string())
+    }
+}
+
+/// Converts one awesome-dsh-plugin entry into a `MarketPlugin`, or None when
+/// its `install` line cannot be resolved to a drivable plugin id.
+fn awesome_to_market(p: &AwesomePlugin) -> Option<MarketPlugin> {
+    let id = parse_awesome_install(&p.install)?;
+    let description = p.description.as_ref().and_then(|d| {
+        let mut list = Vec::new();
+        if let Some(en) = &d.en {
+            list.push(MarketPluginDescription {
+                language: "en".to_string(),
+                content: en.clone(),
+            });
+        }
+        if let Some(zh) = &d.zh {
+            list.push(MarketPluginDescription {
+                language: "zh".to_string(),
+                content: zh.clone(),
+            });
+        }
+        if list.is_empty() {
+            None
+        } else {
+            Some(MarketDescription::Localized(list))
+        }
+    });
+    let urls = p.url.as_ref().map(|u| MarketPluginUrls {
+        homepage: None,
+        repository: Some(u.clone()),
+        issues: None,
+    });
+    Some(MarketPlugin {
+        id,
+        name: p.name.clone(),
+        description,
+        support_versions: None,
+        urls,
+        relationship: None,
+        source: PluginSource::AwesomeDshPlugin,
+        category: p.category.clone(),
+        stars: p.stars,
+        downloads: p.downloads,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -182,13 +326,60 @@ async fn fetch_json(url: &str, cap: usize) -> Result<serde_json::Value, String> 
 // Commands: catalog
 // ---------------------------------------------------------------------------
 
-/// Fetches the marketplace plugin catalog. `query` filters by id/name/
-/// description (case-insensitive substring) when provided.
+/// Fetches the marketplace plugin catalog from every configured source and
+/// merges them. The primary dsh-plug.in catalog is listed first; entries from
+/// the community catalog (awesome-dsh-plugin.com) follow. A source that fails
+/// to fetch or parse is skipped (logged), never aborts the whole listing, and
+/// a duplicate plugin id keeps the higher-priority (earlier) source's entry.
+/// `query` filters by id/name/description (case-insensitive substring).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn fetch_plugin_market(query: Option<String>) -> Result<Vec<MarketPlugin>, String> {
-    let value = fetch_json(MARKET_URL, 4 * 1024 * 1024).await?;
-    let plugins: Vec<MarketPlugin> =
-        serde_json::from_value(value).map_err(|e| format!("解析插件市场数据失败: {e}"))?;
+    // Fetch both catalogs concurrently; each returns Err on failure.
+    let (primary_res, awesome_res) = tokio::join!(
+        fetch_json(MARKET_URL, 4 * 1024 * 1024),
+        fetch_json(AWESOME_URL, 8 * 1024 * 1024)
+    );
+
+    let mut plugins: Vec<MarketPlugin> = Vec::new();
+
+    // Primary catalog (dsh-plug.in) first.
+    match primary_res.and_then(|v| {
+        serde_json::from_value::<Vec<MarketPlugin>>(v)
+            .map_err(|e| format!("解析插件市场数据失败: {e}"))
+    }) {
+        Ok(mut list) => {
+            for p in &mut list {
+                p.source = PluginSource::DshPlugins;
+            }
+            plugins.extend(list);
+        }
+        Err(e) => crate::log_warn!("主插件源获取失败，忽略: {e}"),
+    }
+
+    // Community catalog (awesome-dsh-plugin.com) after; skip duplicate ids.
+    match awesome_res.and_then(|v| {
+        serde_json::from_value::<AwesomeCatalog>(v)
+            .map_err(|e| format!("解析 awesome-dsh-plugin 数据失败: {e}"))
+    }) {
+        Ok(cat) => {
+            for aw in &cat.plugins {
+                let Some(mp) = awesome_to_market(aw) else {
+                    crate::log_warn!(
+                        "awesome 插件「{}」install 行无法解析，跳过: {}",
+                        aw.name,
+                        aw.install
+                    );
+                    continue;
+                };
+                if plugins.iter().any(|p| p.id == mp.id) {
+                    crate::log_warn!("awesome 插件「{}」与主源 id 冲突，保留主源条目", mp.id);
+                    continue;
+                }
+                plugins.push(mp);
+            }
+        }
+        Err(e) => crate::log_warn!("awesome-dsh-plugin 插件源获取失败，忽略: {e}"),
+    }
 
     let q = query
         .as_deref()
@@ -1453,6 +1644,105 @@ mod tests {
         assert_eq!(cordis_id_of("@dsh-external/dsh-sidechain"), "dsh-sidechain");
         assert_eq!(cordis_id_of("dsh-better-sidebar"), "dsh-better-sidebar");
         assert_eq!(cordis_id_of("@canglongcl/dsh-web-review"), "dsh-web-review");
+    }
+
+    #[test]
+    fn parse_awesome_install_npm_and_github() {
+        // npm, bare scoped package.
+        assert_eq!(
+            parse_awesome_install("dsh plugin --profile web add @furongjun1999/dsh-memory"),
+            Some("@furongjun1999/dsh-memory".to_string())
+        );
+        // npm, unscoped with a version suffix (kept verbatim).
+        assert_eq!(
+            parse_awesome_install("dsh plugin --profile web add lodash@4.17.21"),
+            Some("lodash@4.17.21".to_string())
+        );
+        // github: spec normalised to owner/repo.
+        assert_eq!(
+            parse_awesome_install("dsh plugin --profile web add github:0imzero/dsh-workspace-menu"),
+            Some("github:0imzero/dsh-workspace-menu".to_string())
+        );
+        // github: with trailing .git / slash stripped.
+        assert_eq!(
+            parse_awesome_install("dsh plugin --profile web add github:o/r.git"),
+            Some("github:o/r".to_string())
+        );
+        // A different profile name is fine; only the add target matters.
+        assert_eq!(
+            parse_awesome_install("dsh plugin --profile tui add @scope/x"),
+            Some("@scope/x".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_awesome_install_rejects_undrivable() {
+        assert_eq!(parse_awesome_install(""), None);
+        assert_eq!(parse_awesome_install("dsh plugin"), None);
+        assert_eq!(parse_awesome_install("dsh plugin add"), None);
+        // A URL tarball is not a registry/github spec we resolve.
+        assert_eq!(
+            parse_awesome_install("dsh plugin --profile web add https://example.com/x.tgz"),
+            None
+        );
+        // github: with a missing repo part.
+        assert_eq!(
+            parse_awesome_install("dsh plugin add github:onlyowner"),
+            None
+        );
+        // github: with too many path segments.
+        assert_eq!(parse_awesome_install("dsh plugin add github:a/b/c"), None);
+    }
+
+    #[test]
+    fn awesome_to_market_maps_fields() {
+        let raw = r#"{
+            "name": "dsh-memory",
+            "url": "https://github.com/FuRongJun-1999/dsh-memory",
+            "category": "agi",
+            "description": { "en": "White-box AGI.", "zh": "白箱AGI架构探索。" },
+            "npm": "@furongjun1999/dsh-memory",
+            "stars": 35,
+            "downloads": 1856,
+            "install": "dsh plugin --profile web add @furongjun1999/dsh-memory",
+            "added": "2026-08-14"
+        }"#;
+        let aw: AwesomePlugin = serde_json::from_str(raw).unwrap();
+        let mp = awesome_to_market(&aw).expect("install resolves");
+        assert_eq!(mp.id, "@furongjun1999/dsh-memory");
+        assert_eq!(mp.name, "dsh-memory");
+        assert_eq!(mp.source, PluginSource::AwesomeDshPlugin);
+        assert_eq!(mp.category.as_deref(), Some("agi"));
+        assert_eq!(mp.stars, Some(35));
+        assert_eq!(mp.downloads, Some(1856));
+        assert_eq!(
+            mp.urls.as_ref().unwrap().repository.as_deref(),
+            Some("https://github.com/FuRongJun-1999/dsh-memory")
+        );
+        match mp.description {
+            Some(MarketDescription::Localized(list)) => {
+                assert_eq!(list.len(), 2);
+                assert!(list.iter().any(|d| d.language == "zh"));
+            }
+            other => panic!("expected localized description, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn awesome_to_market_github_entry() {
+        let raw = r#"{
+            "name": "dsh-workspace-menu",
+            "url": "https://github.com/0imzero/dsh-workspace-menu",
+            "npm": null,
+            "stars": null,
+            "downloads": null,
+            "install": "dsh plugin --profile web add github:0imzero/dsh-workspace-menu"
+        }"#;
+        let aw: AwesomePlugin = serde_json::from_str(raw).unwrap();
+        let mp = awesome_to_market(&aw).expect("github install resolves");
+        assert_eq!(mp.id, "github:0imzero/dsh-workspace-menu");
+        assert!(mp.description.is_none(), "no description block");
+        assert_eq!(mp.stars, None);
     }
 
     #[test]

@@ -573,6 +573,7 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         {
           id: '@dsh-plugin/dsh-approve-for-me',
           name: 'DSH Approve For Me',
+          source: 'dsh-plugins',
           description: [{ language: 'zh-CN', content: '审查并自动批准命令执行，新增「替我同意」沙箱权限选项' }],
           urls: {
             homepage: 'https://github.com/dsh-plugins/dsh-approve-for-me',
@@ -584,6 +585,7 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         {
           id: '@dsh-plugin/dsh-auxiliary',
           name: 'DSH Auxiliary',
+          source: 'dsh-plugins',
           description: [{ language: 'zh-CN', content: '辅助工具集：图像描述、任务看板等' }],
           urls: {
             repository: 'https://github.com/dsh-plugins/dsh-auxiliary',
@@ -594,8 +596,33 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         {
           id: '@dsh-plugin/dsh-loader',
           name: 'DSH Loader',
+          source: 'dsh-plugins',
           description: [{ language: 'zh-CN', content: 'DSH 插件加载器，所有插件的基础' }],
           urls: { repository: 'https://github.com/dsh-plugins/dsh-loader' },
+        },
+        {
+          id: '@furongjun1999/dsh-memory',
+          name: 'dsh-memory',
+          source: 'awesome-dsh-plugin',
+          category: 'agi',
+          stars: 35,
+          downloads: 1856,
+          description: [
+            { language: 'en', content: 'White-box AGI architecture exploration.' },
+            { language: 'zh', content: '白箱AGI架构探索：元认知、持续学习、世界模型。' },
+          ],
+          urls: { repository: 'https://github.com/FuRongJun-1999/dsh-memory' },
+        },
+        {
+          id: 'github:0imzero/dsh-workspace-menu',
+          name: 'dsh-workspace-menu',
+          source: 'awesome-dsh-plugin',
+          category: 'ui',
+          description: [
+            { language: 'en', content: 'Workspace/chat context menu for the DSH home page.' },
+            { language: 'zh', content: 'DSH 主页工作区/会话增强菜单。' },
+          ],
+          urls: { repository: 'https://github.com/0imzero/dsh-workspace-menu' },
         },
       ]
       if (!q) return all as T
