@@ -14,4 +14,5 @@ sudo apt-get install -y \
   curl \
   wget \
   file \
-  patchelf
+  patchelf \
+  xdg-utils
