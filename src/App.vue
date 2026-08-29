@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useLauncherStore } from '@/stores/launcher'
 import type { ThemeMode } from '@/api/types'
 import { api } from '@/api'
+import ModpackImportDialog from '@/components/ModpackImportDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -41,10 +42,46 @@ onMounted(async () => {
   if (!store.runtime?.node?.installed && route.name !== 'setup') {
     router.push({ name: 'setup' })
   }
+  await setupModpackEntryPoints()
 })
+
+// --- Modpack entry points: .tgz drag-drop + dsh-launcher://pack?url= ---------
+
+const modpackImportVisible = ref(false)
+const modpackImportSource = ref('')
+let unlistenDrag: (() => void) | undefined
+let unlistenDeepLink: (() => void) | undefined
+
+function openModpackImport(source: string) {
+  modpackImportSource.value = source
+  modpackImportVisible.value = true
+}
+
+async function setupModpackEntryPoints() {
+  if (!isTauri) return
+  const { getCurrentWebview } = await import('@tauri-apps/api/webview')
+  unlistenDrag = await getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type !== 'drop') return
+    const path = event.payload.paths.find((p) => p.toLowerCase().endsWith('.tgz'))
+    if (path) openModpackImport(path)
+  })
+  const { listen } = await import('@tauri-apps/api/event')
+  unlistenDeepLink = await listen<string>('deep-link', (event) => {
+    try {
+      const u = new URL(event.payload)
+      if (u.protocol !== 'dsh-launcher:' || u.host !== 'pack') return
+      const packUrl = u.searchParams.get('url')
+      if (packUrl) openModpackImport(packUrl)
+    } catch {
+      // Not a URL we understand; ignore.
+    }
+  })
+}
 
 onUnmounted(() => {
   themeMedia.removeEventListener('change', onSystemThemeChange)
+  unlistenDrag?.()
+  unlistenDeepLink?.()
 })
 
 watch(
@@ -183,6 +220,8 @@ async function onHeaderMouseDown(e: MouseEvent) {
       <span v-else class="task-fab-icon">←</span>
       <span class="task-fab-text">{{ onTasksPage ? t('download.back') : t('tasks.fab') }}</span>
     </div>
+
+    <ModpackImportDialog v-model:visible="modpackImportVisible" :initial-source="modpackImportSource" />
   </a-layout>
 </template>
 

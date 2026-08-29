@@ -136,6 +136,29 @@ export interface ExportModpackInput {
   author?: string
 }
 
+/** Modpack manifest (v2/v3); displayName/description may be a string or a locale map. */
+export interface ModpackManifest {
+  manifestVersion: number
+  name: string
+  displayName?: string | Record<string, string> | null
+  version: string
+  description?: string | Record<string, string> | null
+  author?: string | null
+  icon?: string | null
+  dshVersion?: string | null
+  profileName?: string | null
+  bundles: string[]
+  dependencies: Record<string, string>
+  patch?: string | null
+}
+
+export interface ImportModpackInput {
+  source: string
+  force?: boolean
+  instance_name?: string
+  profile_name?: string
+}
+
 export interface NewInstanceInput {
   name: string
   version_id: string

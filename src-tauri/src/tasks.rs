@@ -783,6 +783,28 @@ fn task_log_mentions_ignored_builds(state: &State<'_, AppState>, task_id: &str) 
         .unwrap_or(false)
 }
 
+/// `pub(crate)` so modpack imports (issue #5) can install the pinned
+/// `dshVersion` the same way instance creation does.
+pub(crate) async fn install_version_streamed_pub(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+    version: &str,
+) -> Result<DshVersion, String> {
+    install_version_streamed(app, state, task_id, version).await
+}
+
+/// `pub(crate)` so modpack imports can prepare the fresh dedicated HOME.
+pub(crate) async fn ensure_web_profile_template_pub(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    task_id: &str,
+    home_path: &std::path::Path,
+    version: &DshVersion,
+) -> Result<(), String> {
+    ensure_web_profile_template(app, state, task_id, home_path, version).await
+}
+
 /// DSH profiles are initialized by pnpm 11, and `dsh plugin` shells out to
 /// whatever pnpm is on PATH. A different pnpm major produces trees the CLI
 /// does not expect and fails in ways that look unrelated, so the launcher

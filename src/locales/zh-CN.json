@@ -244,12 +244,6 @@
     "modpackOutDir": "输出目录",
     "modpackOutDirHint": "选择整合包 .tgz 的输出目录",
     "modpackExported": "整合包已导出：{path}",
-    "modpackImport": "导入整合包",
-    "modpackImportTitle": "导入整合包",
-    "modpackSource": "整合包来源（本地 .tgz 或 URL）",
-    "modpackSourceHint": "选择本地 .tgz 文件，或粘贴 https:// 下载地址",
-    "modpackPickFile": "选择文件",
-    "modpackForce": "覆盖同名 Profile",
     "save": "保存",
     "cancel": "取消",
     "saved": "实例已保存",
@@ -277,6 +271,17 @@
     "terminalExited": "会话已退出",
     "terminalRestart": "重启会话",
     "terminalNoHome": "实例不存在或未配置 DSH_HOME"
+  },
+  "modpack": {
+    "importButton": "导入整合包",
+    "importTitle": "导入整合包",
+    "source": "整合包来源（本地 .tgz 或 URL）",
+    "sourceHint": "选择本地 .tgz 文件，或粘贴 https:// 下载地址",
+    "pickFile": "选择文件",
+    "load": "读取整合包信息",
+    "instanceName": "实例名称",
+    "profileName": "Profile 名称",
+    "force": "覆盖同名 Profile"
   },
   "tasks": {
     "title": "任务管理",

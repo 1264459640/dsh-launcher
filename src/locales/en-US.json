@@ -244,12 +244,6 @@
     "modpackOutDir": "Output directory",
     "modpackOutDirHint": "Choose where the modpack .tgz is written",
     "modpackExported": "Modpack exported: {path}",
-    "modpackImport": "Import modpack",
-    "modpackImportTitle": "Import modpack",
-    "modpackSource": "Modpack source (local .tgz or URL)",
-    "modpackSourceHint": "Pick a local .tgz file, or paste an https:// download URL",
-    "modpackPickFile": "Browse",
-    "modpackForce": "Overwrite the profile if it exists",
     "save": "Save",
     "cancel": "Cancel",
     "saved": "Instance saved",
@@ -277,6 +271,17 @@
     "terminalExited": "Session exited",
     "terminalRestart": "Restart session",
     "terminalNoHome": "Instance missing or no DSH_HOME configured"
+  },
+  "modpack": {
+    "importButton": "Import modpack",
+    "importTitle": "Import modpack",
+    "source": "Modpack source (local .tgz or URL)",
+    "sourceHint": "Pick a local .tgz file, or paste an https:// download URL",
+    "pickFile": "Browse",
+    "load": "Read modpack info",
+    "instanceName": "Instance name",
+    "profileName": "Profile name",
+    "force": "Overwrite the profile if it exists"
   },
   "tasks": {
     "title": "Task Manager",

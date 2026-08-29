@@ -9,12 +9,14 @@ import type {
   DshInstance,
   DshVersion,
   ExportModpackInput,
+  ImportModpackInput,
   InstallPluginInput,
   InstalledPlugin,
   InstanceStatus,
   LauncherSettings,
   LauncherUpdateInfo,
   MarketPlugin,
+  ModpackManifest,
   NewInstanceInput,
   PluginChannel,
   PluginVersionPage,
@@ -540,6 +542,19 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
     }
     case 'start_import_modpack_task':
       return 'task-mock-modpack' as T
+    case 'read_modpack_manifest':
+      return {
+        manifestVersion: 3,
+        name: 'all-about-whales',
+        displayName: { 'en-US': 'All About Whales', 'zh-CN': '大肥鱼套装' },
+        version: '1.0.0',
+        description: '',
+        author: 'hxh230802',
+        dshVersion: '0.1.1-rc.2',
+        profileName: 'all-about-whales',
+        bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
+        dependencies: { 'dsh-pet': '0.2.0' },
+      } as T
     case 'list_instance_status':
       return Object.values(db.running) as T
     case 'check_instance_health':
@@ -777,9 +792,11 @@ export const api = {
     call<void>('delete_profile', { home_id: homeId, name }),
   /** Exports a profile as a modpack .tgz; resolves to the written path. */
   exportModpack: (input: ExportModpackInput) => call<string>('export_modpack', { input }),
-  /** Imports a modpack (.tgz path or URL) as a background task. */
-  startImportModpackTask: (homeId: string, source: string, force: boolean) =>
-    call<string>('start_import_modpack_task', { input: { home_id: homeId, source, force } }),
+  /** Pre-reads a modpack's manifest before installing (for the confirm dialog). */
+  readModpackManifest: (source: string) => call<ModpackManifest>('read_modpack_manifest', { source }),
+  /** Imports a modpack (.tgz path or URL) as a background task creating a new instance. */
+  startImportModpackTask: (input: ImportModpackInput) =>
+    call<string>('start_import_modpack_task', { input }),
 
   startInstance: (id: string, profile: string) => call<void>('start_instance', { id, profile }),
   checkInstanceHealth: (instanceId: string, profile: string) =>

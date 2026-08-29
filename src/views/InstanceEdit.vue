@@ -316,38 +316,6 @@ async function confirmExportModpack() {
   }
 }
 
-const importVisible = ref(false)
-const importSource = ref('')
-const importForce = ref(false)
-const importBusy = ref(false)
-
-async function pickImportFile() {
-  const { open } = await import('@tauri-apps/plugin-dialog')
-  const file = await open({
-    multiple: false,
-    filters: [{ name: 'DSH Modpack', extensions: ['tgz'] }],
-  })
-  if (typeof file === 'string') importSource.value = file
-}
-
-async function confirmImportModpack() {
-  if (!homeId.value || !importSource.value.trim()) return
-  importBusy.value = true
-  try {
-    await api.startImportModpackTask(homeId.value, importSource.value.trim(), importForce.value)
-    importVisible.value = false
-    importSource.value = ''
-    importForce.value = false
-    await store.refreshTasks()
-    Message.success(t('download.taskAdded'))
-    router.push({ name: 'tasks' })
-  } catch (e) {
-    Message.error(String(e))
-  } finally {
-    importBusy.value = false
-  }
-}
-
 // --- Plugins tab ---------------------------------------------------------------
 
 const pluginProfile = ref<string>('')
@@ -655,9 +623,6 @@ const terminalRunning = ref(false)
               <a-button v-if="!addingProfile" size="small" class="profile-add-btn" @click="addingProfile = true">
                 {{ t('instanceEdit.profileAdd') }}
               </a-button>
-              <a-button size="small" class="profile-add-btn" @click="importVisible = true">
-                {{ t('instanceEdit.modpackImport') }}
-              </a-button>
             </template>
 
             <a-alert v-else type="info">
@@ -835,34 +800,8 @@ const terminalRunning = ref(false)
       </a-form>
     </a-modal>
 
-    <!-- Modpack import -->
-    <a-modal
-      v-model:visible="importVisible"
-      :title="t('instanceEdit.modpackImportTitle')"
-      :ok-loading="importBusy"
-      :ok-button-props="{ disabled: !importSource.trim() }"
-      @ok="confirmImportModpack"
-    >
-      <a-form :model="{ source: importSource, force: importForce }" layout="vertical">
-        <a-form-item :label="t('instanceEdit.modpackSource')" required>
-          <a-input
-            v-model="importSource"
-            :placeholder="t('instanceEdit.modpackSourceHint')"
-            allow-clear
-          >
-            <template #append>
-              <a-button @click="pickImportFile">{{ t('instanceEdit.modpackPickFile') }}</a-button>
-            </template>
-          </a-input>
-        </a-form-item>
-        <a-form-item>
-          <a-checkbox v-model="importForce">{{ t('instanceEdit.modpackForce') }}</a-checkbox>
-        </a-form-item>
-      </a-form>
-    </a-modal>
   </div>
 </template>
-
 <style lang="scss" scoped>
 .edit-page {
   display: flex;

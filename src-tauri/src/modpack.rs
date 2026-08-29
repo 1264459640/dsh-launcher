@@ -75,12 +75,19 @@ pub struct ExportModpackInput {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ImportModpackInput {
-    pub home_id: String,
     /// Local `.tgz` path or an http(s) URL.
     pub source: String,
-    /// Replace an existing profile with the same name.
+    /// Replace an existing profile with the same name inside the new HOME.
     #[serde(default)]
     pub force: bool,
+    /// Instance to create; defaults to the manifest's localized display name
+    /// (frontend picks the current locale) or `name`.
+    #[serde(default)]
+    pub instance_name: Option<String>,
+    /// Profile to create; defaults to the manifest's `profileName`, then
+    /// `pack` (keeping `web` clean).
+    #[serde(default)]
+    pub profile_name: Option<String>,
 }
 
 /// Maximum accepted modpack size (64 MiB).
@@ -100,6 +107,16 @@ fn home_path_of(state: &AppState, home_id: &str) -> Result<PathBuf, String> {
         .find(|h| h.id == home_id)
         .map(|h| h.path.clone())
         .ok_or_else(|| "DSH_HOME 不存在".to_string())
+}
+
+/// The current OS username (`USERNAME` on Windows, `USER` elsewhere), used as
+/// the default modpack author.
+fn os_username() -> Option<String> {
+    std::env::var("USERNAME")
+        .ok()
+        .or_else(|| std::env::var("USER").ok())
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
 }
 
 /// Whether a pnpm dependency spec points at a git host (GitHub).
@@ -240,6 +257,74 @@ fn extract_modpack_tgz(tgz: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Reads just `manifest.json` out of a modpack tgz.
+fn read_manifest_from_tgz(tgz: &Path) -> Result<ModpackManifest, String> {
+    let file = std::fs::File::open(tgz).map_err(|e| format!("打开整合包失败: {e}"))?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("读取整合包失败: {e}"))?
+    {
+        let mut entry = entry.map_err(|e| format!("读取整合包条目失败: {e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("读取整合包条目名失败: {e}"))?
+            .into_owned();
+        let clean: PathBuf = path
+            .components()
+            .filter(|c| matches!(c, std::path::Component::Normal(_)))
+            .collect();
+        if clean == Path::new("manifest.json") {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut text)
+                .map_err(|e| format!("读取 manifest.json 失败: {e}"))?;
+            let manifest: ModpackManifest =
+                serde_json::from_str(&text).map_err(|e| format!("解析 manifest.json 失败: {e}"))?;
+            validate_manifest(&manifest)?;
+            return Ok(manifest);
+        }
+    }
+    Err("整合包缺少 manifest.json".to_string())
+}
+
+fn validate_manifest(manifest: &ModpackManifest) -> Result<(), String> {
+    if !(2..=MANIFEST_VERSION).contains(&manifest.manifest_version) {
+        return Err(format!(
+            "不支持的 manifestVersion {}（支持 2-{MANIFEST_VERSION}）",
+            manifest.manifest_version
+        ));
+    }
+    Ok(())
+}
+
+/// Downloads the modpack when `source` is a URL into a temp file; local
+/// paths are used as-is. Returns (path, temp dir guard).
+async fn fetch_modpack_source(source: &str) -> Result<(PathBuf, TmpDir), String> {
+    let tmp = std::env::temp_dir().join(format!("dsh-modpack-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("创建临时目录失败: {e}"))?;
+    let guard = TmpDir(tmp.clone());
+    if source.starts_with("https://") || source.starts_with("http://") {
+        let target = tmp.join("modpack.tgz");
+        download_modpack(source, &target).await?;
+        Ok((target, guard))
+    } else {
+        let p = PathBuf::from(source);
+        if !p.exists() {
+            return Err(format!("整合包文件不存在: {}", p.display()));
+        }
+        Ok((p, guard))
+    }
+}
+
+/// Pre-reads a modpack's manifest so the UI can show metadata and let the
+/// user adjust instance/profile names before starting the install task.
+#[tauri::command]
+pub async fn read_modpack_manifest(source: String) -> Result<ModpackManifest, String> {
+    let (tgz, _guard) = fetch_modpack_source(&source).await?;
+    read_manifest_from_tgz(&tgz)
+}
+
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
@@ -299,15 +384,16 @@ pub fn export_modpack(
         }
     }
 
-    // dshVersion: the first instance bound to this HOME defines the floor.
+    // dshVersion: pinned to the exact version of the first instance bound to
+    // this HOME, so import installs the same DSH the pack was built with.
     let dsh_version = {
         let cfg = state.config.lock().unwrap();
         cfg.instances
             .iter()
             .find(|i| i.home_id == input.home_id)
             .and_then(|i| cfg.versions.iter().find(|v| v.id == i.version_id))
-            .map(|v| format!(">={}", v.version))
-            .unwrap_or_else(|| ">=0.1.0".to_string())
+            .map(|v| v.version.clone())
+            .unwrap_or_else(|| "0.1.0".to_string())
     };
 
     let name = input
@@ -326,7 +412,10 @@ pub fn export_modpack(
         display_name: input.display_name,
         version: version.clone(),
         description: input.description,
-        author: input.author,
+        author: input
+            .author
+            .filter(|a| !a.trim().is_empty())
+            .or_else(os_username),
         icon: None,
         dsh_version: Some(dsh_version),
         profile_name: Some(input.profile.clone()),
@@ -409,22 +498,26 @@ fn coord_to_pkg_name(coord: &str) -> String {
 // Import
 // ---------------------------------------------------------------------------
 
-/// Starts a background task that installs a modpack into a HOME's profiles.
+/// Starts a background task that installs a modpack: it creates a fresh
+/// instance with a dedicated DSH_HOME and the pack's profile as its default
+/// profile, keeping the `web` profile pristine.
 #[tauri::command]
 pub async fn start_import_modpack_task(
     app: AppHandle,
     state: State<'_, AppState>,
     input: ImportModpackInput,
 ) -> Result<String, String> {
-    let home = home_path_of(&state, &input.home_id)?;
-    if !home.exists() {
-        return Err(format!("DSH_HOME 目录不存在: {}", home.display()));
+    if input.source.trim().is_empty() {
+        return Err("整合包来源不能为空".to_string());
     }
 
     let task = crate::tasks::TaskInfo {
         id: new_id("t"),
         kind: "import-modpack".to_string(),
-        label: format!("导入整合包 {} 到「{}」", input.source, input.home_id),
+        label: format!(
+            "导入整合包 {}",
+            input.instance_name.as_deref().unwrap_or(&input.source)
+        ),
         version: String::new(),
         state: crate::tasks::TaskState::Running,
         percent: 0,
@@ -458,16 +551,16 @@ pub async fn start_import_modpack_task(
                 return;
             }
             match result {
-                Ok(profile) => {
+                Ok(imported) => {
                     task.state = crate::tasks::TaskState::Done;
                     task.percent = 100;
-                    task.message = Some(format!("已导入 profile「{profile}」"));
+                    task.message = Some(format!("已导入实例 {imported}"));
                     crate::tasks::emit_progress_pub(
                         &worker_app,
                         &worker_task_id,
                         crate::tasks::TaskState::Done,
                         100,
-                        Some(format!("已导入 profile「{profile}」")),
+                        Some(format!("已导入实例 {imported}")),
                         None,
                     );
                 }
@@ -499,58 +592,106 @@ async fn do_import_modpack(
     task_id: &str,
     input: &ImportModpackInput,
 ) -> Result<String, String> {
-    let home = home_path_of(state, &input.home_id)?;
-
-    // 1. Obtain the tgz locally.
-    let tmp = std::env::temp_dir().join(format!("dsh-modpack-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&tmp).map_err(|e| format!("创建临时目录失败: {e}"))?;
-    let guard = TmpDir(tmp.clone());
-    let tgz = if input.source.starts_with("https://") || input.source.starts_with("http://") {
-        crate::tasks::push_task_log_pub(app, state, task_id, "正在下载整合包…").await;
-        let target = tmp.join("modpack.tgz");
-        download_modpack(&input.source, &target).await?;
-        target
-    } else {
-        let p = PathBuf::from(&input.source);
-        if !p.exists() {
-            return Err(format!("整合包文件不存在: {}", p.display()));
-        }
-        p
-    };
-
-    // 2. Extract + validate the manifest.
+    // 1. Obtain the tgz locally, extract, and validate the manifest.
+    let (tgz, guard) = fetch_modpack_source(&input.source).await?;
+    let tmp = guard.0.clone();
     let unpacked = tmp.join("pack");
     extract_modpack_tgz(&tgz, &unpacked)?;
     let manifest_raw = std::fs::read_to_string(unpacked.join("manifest.json"))
         .map_err(|_| "整合包缺少 manifest.json".to_string())?;
     let manifest: ModpackManifest =
         serde_json::from_str(&manifest_raw).map_err(|e| format!("解析 manifest.json 失败: {e}"))?;
-    if !(2..=MANIFEST_VERSION).contains(&manifest.manifest_version) {
-        return Err(format!(
-            "不支持的 manifestVersion {}（支持 2-{MANIFEST_VERSION}）",
-            manifest.manifest_version
-        ));
-    }
-    let profile_name = manifest
+    validate_manifest(&manifest)?;
+
+    // 2. Resolve names. Profile: input override → manifest profileName →
+    //    "pack" (keeping `web` clean). Instance: input override → plain-string
+    //    displayName → name.
+    let profile_name = input
         .profile_name
         .clone()
-        .unwrap_or_else(|| manifest.name.clone());
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| manifest.profile_name.clone())
+        .unwrap_or_else(|| "pack".to_string());
     let profile_name = crate::config::sanitize_name(&profile_name);
     if profile_name.is_empty() {
         return Err("整合包的 profileName 无效".to_string());
     }
+    let instance_name = input
+        .instance_name
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| {
+            manifest
+                .display_name
+                .as_ref()
+                .and_then(|d| d.as_str().map(|s| s.to_string()))
+        })
+        .unwrap_or_else(|| manifest.name.clone());
+    let instance_name = {
+        let cfg = state.config.lock().unwrap();
+        dedupe_instance_name(&cfg, &instance_name)
+    };
     crate::tasks::push_task_log_pub(
         app,
         state,
         task_id,
         &format!(
-            "整合包 {} v{} → profile「{}」",
-            manifest.name, manifest.version, profile_name
+            "整合包 {} v{} → 实例「{}」/ profile「{}」",
+            manifest.name, manifest.version, instance_name, profile_name
         ),
     )
     .await;
 
-    // 3. Materialize the profile directory.
+    // 3. Resolve the DSH version: the manifest's pinned dshVersion (exact),
+    //    falling back to the newest installed version. Install if missing.
+    let version_str = manifest
+        .dsh_version
+        .as_deref()
+        .map(|v| {
+            v.trim()
+                .trim_start_matches(['>', '=', '^', '~', ' '])
+                .to_string()
+        })
+        .filter(|v| !v.is_empty());
+    let version_record = {
+        let cfg = state.config.lock().unwrap();
+        match &version_str {
+            Some(v) => cfg.versions.iter().find(|r| r.version == *v).cloned(),
+            None => cfg.versions.last().cloned(),
+        }
+    };
+    let version_record = match version_record {
+        Some(v) => v,
+        None => match &version_str {
+            Some(v) => {
+                crate::tasks::push_task_log_pub(
+                    app,
+                    state,
+                    task_id,
+                    &format!("整合包需要 DSH {v}，本机未安装，开始安装…"),
+                )
+                .await;
+                crate::tasks::install_version_streamed_pub(app, state, task_id, v).await?
+            }
+            None => {
+                return Err("整合包未声明 dshVersion 且本机没有已安装的 DSH 版本".to_string());
+            }
+        },
+    };
+
+    // 4. Dedicated HOME for the new instance (path-based reuse keeps a retry
+    //    idempotent), then prepare the pristine web profile template.
+    let home_path = state
+        .data_dir
+        .join("homes")
+        .join(crate::config::sanitize_name(&instance_name));
+    let home =
+        crate::commands::create_home_record(state, &instance_name, &home_path.to_string_lossy())?;
+    crate::tasks::ensure_web_profile_template_pub(app, state, task_id, &home.path, &version_record)
+        .await?;
+
+    // 5. Materialize the pack profile directory inside the fresh HOME.
+    let home = home.path;
     let dest = crate::plugins::profile_dir_pub(&home, &profile_name);
     if dest.exists() {
         if !input.force {
@@ -652,9 +793,59 @@ async fn do_import_modpack(
         return Err(last_err);
     }
 
-    crate::log_info!("整合包 {} 已导入到 {}", manifest.name, dest.display());
+    // 7. Register the instance with the pack profile as its default.
+    let instance_id = {
+        let mut cfg = state.config.lock().unwrap();
+        let inst = crate::config::DshInstance {
+            id: new_id("i"),
+            name: instance_name.clone(),
+            version_id: version_record.id.clone(),
+            home_id: home_id_of_path(&cfg, &home).ok_or_else(|| "DSH_HOME 记录缺失".to_string())?,
+            env_overrides: Default::default(),
+            default_profile: Some(profile_name.clone()),
+            last_profile: None,
+        };
+        cfg.instances.push(inst.clone());
+        crate::commands::save_state(state, &cfg)?;
+        inst.id
+    };
+
+    crate::log_info!(
+        "整合包 {} 已导入为实例「{}」（profile「{}」）",
+        manifest.name,
+        instance_name,
+        profile_name
+    );
     drop(guard);
-    Ok(profile_name)
+    Ok(format!("{instance_name}（{instance_id}）"))
+}
+
+/// Finds a free instance name, appending `-2`, `-3`, … when taken.
+fn dedupe_instance_name(cfg: &crate::config::Config, base: &str) -> String {
+    let base = if base.trim().is_empty() {
+        "modpack"
+    } else {
+        base.trim()
+    };
+    if !cfg.instances.iter().any(|i| i.name == base) {
+        return base.to_string();
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if !cfg.instances.iter().any(|i| i.name == candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// HOME id for a path (the dedicated HOME was just created or reused).
+fn home_id_of_path(cfg: &crate::config::Config, path: &Path) -> Option<String> {
+    cfg.homes
+        .iter()
+        .find(|h| crate::config::paths_equal(&h.path, path))
+        .map(|h| h.id.clone())
 }
 
 /// Downloads a modpack URL to `target` with a size cap.

@@ -6,10 +6,13 @@ import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
 import type { DshInstance, InstanceState } from '@/api/types'
+import ModpackImportDialog from '@/components/ModpackImportDialog.vue'
 
 const router = useRouter()
 const { t } = useI18n()
 const store = useLauncherStore()
+
+const modpackImportVisible = ref(false)
 
 const columns = computed(() => [
   { title: t('instances.table.name'), dataIndex: 'name', width: 180 },
@@ -103,6 +106,9 @@ async function onOpenWindow(id: string) {
       <div class="dl-card-title">
         <h3>{{ t('instances.title') }}</h3>
         <div class="dl-toolbar">
+          <a-button @click="modpackImportVisible = true">
+            {{ t('modpack.importButton') }}
+          </a-button>
           <a-button type="primary" @click="router.push({ name: 'download' })">
             {{ t('instances.newInstance') }}
           </a-button>
@@ -193,6 +199,8 @@ async function onOpenWindow(id: string) {
         <p class="copy-hint">{{ t('instances.copyHint') }}</p>
       </a-form>
     </a-modal>
+
+    <ModpackImportDialog v-model:visible="modpackImportVisible" />
   </div>
 </template>
 

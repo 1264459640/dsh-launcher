@@ -14,7 +14,7 @@ mod windows;
 
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 
 pub struct AppState {
     pub config_path: std::path::PathBuf,
@@ -38,11 +38,29 @@ pub struct AppState {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
         .setup(|app| {
+            // Register the dsh-launcher:// scheme at runtime (Windows/Linux)
+            // and forward every deep link to the frontend; the modpack
+            // import flow consumes dsh-launcher://pack?url=<tgz>.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(e) = app.deep_link().register("dsh-launcher") {
+                    crate::log_warn!("注册 dsh-launcher:// 协议失败: {e}");
+                }
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        crate::log_info!("收到 deep link: {url}");
+                        let _ = handle.emit("deep-link", url.to_string());
+                    }
+                });
+            }
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let config_path = data_dir.join("config.json");
@@ -138,6 +156,7 @@ pub fn run() {
             plugins::uninstall_plugin,
             plugins::start_install_plugin_task,
             modpack::export_modpack,
+            modpack::read_modpack_manifest,
             modpack::start_import_modpack_task,
             terminal::start_terminal_session,
             terminal::write_terminal_input,
