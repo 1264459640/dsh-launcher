@@ -59,6 +59,10 @@ function openModpackImport(source: string) {
 
 async function setupModpackEntryPoints() {
   if (!isTauri) return
+  // Cold start via protocol: the deep link arrived in argv before the
+  // webview could listen; pull it now.
+  const pending = await api.pendingDeepLink()
+  if (pending) handleDeepLink(pending)
   const { getCurrentWebview } = await import('@tauri-apps/api/webview')
   unlistenDrag = await getCurrentWebview().onDragDropEvent((event) => {
     if (event.payload.type !== 'drop') return
@@ -66,16 +70,19 @@ async function setupModpackEntryPoints() {
     if (path) openModpackImport(path)
   })
   const { listen } = await import('@tauri-apps/api/event')
-  unlistenDeepLink = await listen<string>('deep-link', (event) => {
-    try {
-      const u = new URL(event.payload)
-      if (u.protocol !== 'dsh-launcher:' || u.host !== 'pack') return
-      const packUrl = u.searchParams.get('url')
-      if (packUrl) openModpackImport(packUrl)
-    } catch {
-      // Not a URL we understand; ignore.
-    }
-  })
+  unlistenDeepLink = await listen<string>('deep-link', (event) => handleDeepLink(event.payload))
+}
+
+/** dsh-launcher://pack?url=<tgz> → open the modpack import dialog. */
+function handleDeepLink(raw: string) {
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'dsh-launcher:' || u.host !== 'pack') return
+    const packUrl = u.searchParams.get('url')
+    if (packUrl) openModpackImport(packUrl)
+  } catch {
+    // Not a URL we understand; ignore.
+  }
 }
 
 onUnmounted(() => {

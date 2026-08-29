@@ -34,9 +34,37 @@ pub struct AppState {
     pub terminals: tokio::sync::Mutex<HashMap<String, terminal::TerminalSession>>,
 }
 
+/// Extracts a `dsh-launcher://…` deep link from process arguments (Windows
+/// protocol activation passes the URL as an argv entry).
+pub(crate) fn deep_link_from_args(args: &[String]) -> Option<String> {
+    args.iter()
+        .find(|a| a.starts_with("dsh-launcher://"))
+        .cloned()
+}
+
+/// Pending cold-start deep link: the frontend pulls this once the webview is
+/// ready (events emitted before that would be lost).
+#[tauri::command]
+fn pending_deep_link() -> Option<String> {
+    deep_link_from_args(&std::env::args().collect::<Vec<_>>())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Single instance first: a second launch (e.g. browser protocol
+        // activation) forwards its argv to the running instance and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+            if let Some(url) = deep_link_from_args(&argv) {
+                crate::log_info!("单实例转发 deep link: {url}");
+                let _ = app.emit("deep-link", url);
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
@@ -145,6 +173,7 @@ pub fn run() {
             commands::list_instance_status,
             commands::open_instance_window,
             commands::open_external,
+            pending_deep_link,
             commands::get_settings,
             commands::update_settings,
             commands::fetch_news,

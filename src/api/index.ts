@@ -542,6 +542,8 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
     }
     case 'start_import_modpack_task':
       return 'task-mock-modpack' as T
+    case 'pending_deep_link':
+      return null as T
     case 'read_modpack_manifest':
       return {
         manifestVersion: 3,
@@ -794,6 +796,8 @@ export const api = {
   exportModpack: (input: ExportModpackInput) => call<string>('export_modpack', { input }),
   /** Pre-reads a modpack's manifest before installing (for the confirm dialog). */
   readModpackManifest: (source: string) => call<ModpackManifest>('read_modpack_manifest', { source }),
+  /** Cold-start deep link from process argv (null when launched normally). */
+  pendingDeepLink: () => call<string | null>('pending_deep_link'),
   /** Imports a modpack (.tgz path or URL) as a background task creating a new instance. */
   startImportModpackTask: (input: ImportModpackInput) =>
     call<string>('start_import_modpack_task', { input }),
