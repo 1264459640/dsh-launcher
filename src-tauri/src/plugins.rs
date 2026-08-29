@@ -643,7 +643,11 @@ async fn npm_versions(
         out.push(PluginVersionInfo {
             version: ver,
             channel: channel.clone(),
-            label: if ts.is_empty() { None } else { Some(ts.clone()) },
+            label: if ts.is_empty() {
+                None
+            } else {
+                Some(ts.clone())
+            },
             published_at: if ts.is_empty() { None } else { Some(ts) },
             is_default,
         });
