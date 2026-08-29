@@ -10,6 +10,7 @@ import markedKatex from 'marked-katex-extension'
 import DOMPurify from 'dompurify'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
+import { markedSpoiler } from '@/utils/marked-spoiler'
 import launcherDefaultIcon from '@/assets/launcher-icon.png'
 import 'katex/dist/katex.min.css'
 
@@ -37,6 +38,7 @@ const marked = new Marked({ gfm: true, breaks: true })
   .use(markedAlert())
   .use(markedFootnote())
   .use(markedKatex({ throwOnError: false }))
+  .use(markedSpoiler())
 
 // marked-alert only matches UPPERCASE alert types, while GitHub treats
 // `[!note]`/`[!Note]` the same as `[!NOTE]`. Normalize the type to uppercase
@@ -216,6 +218,15 @@ watch(newsHtml, async () => {
 // so native `href="#id"` navigation does nothing. Intercept and scroll the
 // scroll container manually.
 function onNewsClick(e: MouseEvent) {
+  // Spoiler bars ( >!…!< ): click pins the revealed state (hover already
+  // reveals via CSS). A revealed spoiler falls through so links inside it
+  // keep working.
+  const spoiler = (e.target as HTMLElement | null)?.closest('.md-spoiler:not(.md-spoiler-revealed)')
+  if (spoiler) {
+    spoiler.classList.add('md-spoiler-revealed')
+    e.preventDefault()
+    return
+  }
   const target = (e.target as HTMLElement | null)?.closest('a[href^="#"]') as HTMLAnchorElement | null
   if (!target) return
   e.preventDefault()
@@ -656,6 +667,34 @@ function goEditSelected() {
     background: var(--color-fill-2);
     border-radius: 4px;
     padding: 1px 5px;
+  }
+
+  // Inline spoilers ( >!…!< ): an opaque bar in the strongest text color;
+  // hover reveals it temporarily, click pins the revealed state.
+  :deep(.md-spoiler) {
+    border-radius: 4px;
+    padding: 0 4px;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
+  }
+
+  :deep(.md-spoiler:not(.md-spoiler-revealed)) {
+    background: var(--color-text-1);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  :deep(.md-spoiler:not(.md-spoiler-revealed):not(:hover)),
+  :deep(.md-spoiler:not(.md-spoiler-revealed):not(:hover) *) {
+    color: transparent !important;
+    background-color: transparent !important;
+    text-shadow: none !important;
+    text-decoration-color: transparent !important;
+  }
+
+  :deep(.md-spoiler:not(.md-spoiler-revealed):not(:hover) a) {
+    pointer-events: none;
   }
 
   :deep(pre) {

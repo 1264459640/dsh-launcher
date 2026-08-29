@@ -159,7 +159,7 @@
     },
     "newsSource": "News source",
     "newsSourcePlaceholder": "https://…/news.md or a local .md/.html path",
-    "newsSourceHint": "Markdown (GFM + inline HTML) and HTML are supported; content is XSS-sanitized before being shown in the news area on the home page, and links open in a new window.",
+    "newsSourceHint": "Markdown (GFM + inline HTML + the &gt;!spoiler!&lt; redaction syntax) and HTML are supported; content is XSS-sanitized before being shown in the news area on the home page, and links open in a new window.",
     "skillRepos": {
       "title": "SKILL repositories",
       "hint": "Format: https://[user:password{'@'}]github.com/user/repo[.git][#/path/to/skill]; install or update skills from a repo on the instance SKILL tab, versioned by commit / tag.",
