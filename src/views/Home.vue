@@ -669,9 +669,10 @@ function goEditSelected() {
     padding: 1px 5px;
   }
 
-  // Inline spoilers ( >!…!< ): hidden state paints bar and glyphs in the
-  // same strongest text color (dark theme → white bar, light theme → black
-  // bar); hover or click reveals normal text on a transparent background.
+  // Inline spoilers ( >!…!< ): the bar flattens the (translucent in dark
+  // mode) text color over the page background so it is fully opaque, while
+  // the glyphs are transparent — nothing can show through. Hover or click
+  // reveals normal text on a transparent background.
   :deep(.md-spoiler) {
     border-radius: 4px;
     padding: 0 4px;
@@ -681,14 +682,16 @@ function goEditSelected() {
   }
 
   :deep(.md-spoiler:not(.md-spoiler-revealed):not(:hover)) {
-    background: var(--color-text-1);
-    color: var(--color-text-1);
+    background:
+      linear-gradient(var(--color-text-1), var(--color-text-1)),
+      var(--color-bg-1);
+    color: transparent;
     cursor: pointer;
     user-select: none;
 
     // Children only: the span itself must keep its opaque bar background.
     * {
-      color: var(--color-text-1) !important;
+      color: transparent !important;
       background-color: transparent !important;
       text-shadow: none !important;
       text-decoration-color: transparent !important;
