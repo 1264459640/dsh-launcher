@@ -339,7 +339,7 @@ pub struct SetPluginsEnabledInput {
 // ---------------------------------------------------------------------------
 
 fn http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
+    crate::proxy::apply(reqwest::Client::builder())
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("dsh-launcher")
         .build()

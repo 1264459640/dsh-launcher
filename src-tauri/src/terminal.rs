@@ -129,6 +129,10 @@ fn terminal_env(
         }
         env.push((k.clone(), v.clone()));
     }
+    // Launcher proxy applied to dsh: overrides the instance's own proxy vars.
+    if cfg.settings.proxy_enabled && cfg.settings.proxy_apply_dsh {
+        crate::proxy::override_env(&mut env, &cfg.settings);
+    }
 
     let existing = std::env::var_os("PATH").unwrap_or_default();
     let mut entries = vec![shim_dir.to_path_buf()];

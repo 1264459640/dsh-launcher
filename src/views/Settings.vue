@@ -120,6 +120,42 @@ async function onRemoveSkillRepo(url: string) {
   await patchSettings({ skill_repos: store.settings.skill_repos.filter((r) => r !== url) })
 }
 
+// --- Proxy settings -----------------------------------------------------------
+
+async function onProxyEnabledChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
+  await patchSettings({ proxy_enabled: Boolean(value) })
+}
+
+async function onProxyApplyDshChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
+  await patchSettings({ proxy_apply_dsh: Boolean(value) })
+}
+
+// Text fields save on blur / Enter so typing is not interrupted.
+const proxyUrl = ref(store.settings.proxy_url ?? '')
+const proxyPort = ref(store.settings.proxy_port ?? 7890)
+const noProxy = ref(store.settings.no_proxy ?? '')
+watch(
+  () => [store.settings.proxy_url, store.settings.proxy_port, store.settings.no_proxy] as const,
+  ([url, port, np]) => {
+    const u = String(url ?? '')
+    if (u !== proxyUrl.value) proxyUrl.value = u
+    const p = Number(port ?? 7890)
+    if (p !== proxyPort.value) proxyPort.value = p
+    const n = String(np ?? '')
+    if (n !== noProxy.value) noProxy.value = n
+  },
+)
+
+async function onProxyFieldsSave() {
+  const patch: Parameters<typeof api.updateSettings>[0] = {}
+  const url = proxyUrl.value.trim()
+  if (url && url !== store.settings.proxy_url) patch.proxy_url = url
+  if (proxyPort.value && proxyPort.value !== store.settings.proxy_port) patch.proxy_port = proxyPort.value
+  const np = noProxy.value.trim()
+  if (np !== (store.settings.no_proxy ?? '')) patch.no_proxy = np
+  if (Object.keys(patch).length > 0) await patchSettings(patch)
+}
+
 // --- DSH_HOME management ------------------------------------------------------
 
 const newHomeName = ref('')
@@ -225,6 +261,57 @@ const homeColumns = computed(() => [
             @press-enter="onNewsSourceSave"
           />
           <p class="news-source-hint">{{ t('settings.newsSourceHint') }}</p>
+        </a-form-item>
+      </a-form>
+    </div>
+
+    <div class="dl-card">
+      <div class="dl-card-title">
+        <h3>{{ t('settings.proxy.title') }}</h3>
+      </div>
+      <a-form :model="store.settings" layout="vertical" class="settings-form">
+        <a-form-item>
+          <a-switch :model-value="store.settings.proxy_enabled" @change="onProxyEnabledChange" />
+          <span class="switch-label">{{ t('settings.proxy.enabled') }}</span>
+          <p class="news-source-hint">{{ t('settings.proxy.enabledHint') }}</p>
+        </a-form-item>
+        <a-form-item :label="t('settings.proxy.url')">
+          <a-input
+            v-model="proxyUrl"
+            :disabled="!store.settings.proxy_enabled"
+            placeholder="http://127.0.0.1"
+            @blur="onProxyFieldsSave"
+            @press-enter="onProxyFieldsSave"
+          />
+        </a-form-item>
+        <a-form-item :label="t('settings.proxy.port')">
+          <a-input-number
+            v-model="proxyPort"
+            :disabled="!store.settings.proxy_enabled"
+            :min="1"
+            :max="65535"
+            style="width: 220px"
+            @blur="onProxyFieldsSave"
+          />
+        </a-form-item>
+        <a-form-item :label="t('settings.proxy.noProxy')">
+          <a-input
+            v-model="noProxy"
+            :disabled="!store.settings.proxy_enabled"
+            placeholder="127.0.0.1,localhost,::1"
+            @blur="onProxyFieldsSave"
+            @press-enter="onProxyFieldsSave"
+          />
+          <p class="news-source-hint">{{ t('settings.proxy.noProxyHint') }}</p>
+        </a-form-item>
+        <a-form-item>
+          <a-switch
+            :model-value="store.settings.proxy_apply_dsh"
+            :disabled="!store.settings.proxy_enabled"
+            @change="onProxyApplyDshChange"
+          />
+          <span class="switch-label">{{ t('settings.proxy.applyDsh') }}</span>
+          <p class="news-source-hint">{{ t('settings.proxy.applyDshHint') }}</p>
         </a-form-item>
       </a-form>
     </div>

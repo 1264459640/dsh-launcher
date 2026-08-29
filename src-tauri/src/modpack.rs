@@ -1062,7 +1062,7 @@ fn home_id_of_path(cfg: &crate::config::Config, path: &Path) -> Option<String> {
 
 /// Downloads a modpack URL to `target` with a size cap.
 async fn download_modpack(url: &str, target: &Path) -> Result<(), String> {
-    let client = reqwest::Client::builder()
+    let client = crate::proxy::apply(reqwest::Client::builder())
         .timeout(std::time::Duration::from_secs(300))
         .user_agent("dsh-launcher")
         .build()

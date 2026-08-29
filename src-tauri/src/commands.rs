@@ -847,6 +847,25 @@ pub fn update_settings(
             .filter(|u| !u.is_empty())
             .collect();
     }
+    if let Some(v) = settings.proxy_enabled {
+        cfg.settings.proxy_enabled = v;
+    }
+    if let Some(v) = settings.proxy_url {
+        let v = v.trim().trim_end_matches('/').to_string();
+        if !v.is_empty() {
+            cfg.settings.proxy_url = v;
+        }
+    }
+    if let Some(v) = settings.proxy_port {
+        cfg.settings.proxy_port = v;
+    }
+    if let Some(v) = settings.no_proxy {
+        cfg.settings.no_proxy = v.trim().to_string();
+    }
+    if let Some(v) = settings.proxy_apply_dsh {
+        cfg.settings.proxy_apply_dsh = v;
+    }
+    crate::proxy::sync_from_settings(&cfg.settings);
     let out = cfg.settings.clone();
     save_state(&state, &cfg)?;
     crate::log_debug!("设置已更新并保存");
@@ -976,7 +995,7 @@ pub async fn fetch_news(source: String) -> Result<String, String> {
     }
 
     if source.starts_with("http://") || source.starts_with("https://") {
-        let client = reqwest::Client::builder()
+        let client = crate::proxy::apply(reqwest::Client::builder())
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("dsh-launcher")
             .build()

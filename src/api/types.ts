@@ -34,6 +34,16 @@ export interface LauncherSettings {
   log_level: LogLevel
   /** SKILL source repos: https://[user:password@]github.com/user/repo[.git][#/path/to/skill] */
   skill_repos: string[]
+  /** Route the launcher's own HTTP requests through a proxy. */
+  proxy_enabled: boolean
+  /** Proxy URL without port (PROXY_URL), e.g. http://127.0.0.1 */
+  proxy_url: string
+  /** PROXY_PORT */
+  proxy_port: number
+  /** Comma-separated bypass list (NO_PROXY). */
+  no_proxy: string
+  /** Inject the proxy into launched dsh instances (overrides instance env; applies on next start). */
+  proxy_apply_dsh: boolean
 }
 
 /** UI theme: explicit light/dark, or follow the OS color scheme. */

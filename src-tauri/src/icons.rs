@@ -36,7 +36,7 @@ pub(crate) fn crop_square_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Downloads an icon URL with a size cap.
 async fn fetch_icon(url: &str) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::builder()
+    let client = crate::proxy::apply(reqwest::Client::builder())
         .timeout(std::time::Duration::from_secs(60))
         .user_agent("dsh-launcher")
         .build()

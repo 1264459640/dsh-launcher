@@ -62,6 +62,21 @@ pub struct LauncherSettings {
     /// `https://[user:password@]github.com/user/repo[.git][#/path/to/skill]`.
     #[serde(default)]
     pub skill_repos: Vec<String>,
+    /// Route the launcher's own HTTP requests through a proxy.
+    #[serde(default)]
+    pub proxy_enabled: bool,
+    /// Proxy URL without port, e.g. `http://127.0.0.1`.
+    #[serde(default = "default_proxy_url")]
+    pub proxy_url: String,
+    #[serde(default = "default_proxy_port")]
+    pub proxy_port: u16,
+    /// Comma-separated hosts that bypass the proxy (NO_PROXY).
+    #[serde(default = "default_no_proxy")]
+    pub no_proxy: String,
+    /// Also inject the proxy into launched dsh instances, overriding the
+    /// instance's own environment variables (applies on next start).
+    #[serde(default)]
+    pub proxy_apply_dsh: bool,
 }
 
 fn default_locale() -> String {
@@ -85,6 +100,18 @@ fn default_news_source() -> String {
         .to_string()
 }
 
+fn default_proxy_url() -> String {
+    "http://127.0.0.1".to_string()
+}
+
+fn default_proxy_port() -> u16 {
+    7890
+}
+
+fn default_no_proxy() -> String {
+    "127.0.0.1,localhost,::1".to_string()
+}
+
 impl Default for LauncherSettings {
     fn default() -> Self {
         Self {
@@ -96,6 +123,11 @@ impl Default for LauncherSettings {
             theme: default_theme(),
             log_level: default_log_level(),
             skill_repos: Vec::new(),
+            proxy_enabled: false,
+            proxy_url: default_proxy_url(),
+            proxy_port: default_proxy_port(),
+            no_proxy: default_no_proxy(),
+            proxy_apply_dsh: false,
         }
     }
 }
@@ -157,6 +189,16 @@ pub struct SettingsPatch {
     pub log_level: Option<String>,
     #[serde(default)]
     pub skill_repos: Option<Vec<String>>,
+    #[serde(default)]
+    pub proxy_enabled: Option<bool>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub proxy_port: Option<u16>,
+    #[serde(default)]
+    pub no_proxy: Option<String>,
+    #[serde(default)]
+    pub proxy_apply_dsh: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

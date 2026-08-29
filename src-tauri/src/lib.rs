@@ -7,6 +7,7 @@ mod mcp;
 mod modpack;
 mod plugins;
 mod process;
+mod proxy;
 mod runtime;
 mod skills;
 mod tasks;
@@ -115,6 +116,7 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             let config_path = data_dir.join("config.json");
             let cfg = config::load_config(&config_path);
+            proxy::sync_from_settings(&cfg.settings);
 
             // Runtime log: rotate the previous latest.log, then apply the
             // configured level (invalid stored values fall back to info).

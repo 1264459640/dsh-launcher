@@ -94,6 +94,11 @@ function seedDb(): MockDb {
       theme: 'system',
       log_level: 'info',
       skill_repos: ['https://github.com/Gu-ZT/skills'],
+      proxy_enabled: false,
+      proxy_url: 'http://127.0.0.1',
+      proxy_port: 7890,
+      no_proxy: '127.0.0.1,localhost,::1',
+      proxy_apply_dsh: false,
     },
     running: {},
     mcp: {},
@@ -107,6 +112,11 @@ function loadDb(): MockDb {
       const db = JSON.parse(raw) as MockDb
       // Backfill fields added after the mock db was persisted.
       db.settings.log_level = db.settings.log_level ?? 'info'
+      db.settings.proxy_enabled = db.settings.proxy_enabled ?? false
+      db.settings.proxy_url = db.settings.proxy_url ?? 'http://127.0.0.1'
+      db.settings.proxy_port = db.settings.proxy_port ?? 7890
+      db.settings.no_proxy = db.settings.no_proxy ?? '127.0.0.1,localhost,::1'
+      db.settings.proxy_apply_dsh = db.settings.proxy_apply_dsh ?? false
       db.mcp = db.mcp ?? {}
       return db
     }

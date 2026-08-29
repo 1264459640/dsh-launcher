@@ -168,6 +168,17 @@
       "empty": "No SKILL repositories yet"
     },
     "skillRepoExists": "This repo is already listed",
+    "proxy": {
+      "title": "Proxy",
+      "enabled": "Enable proxy",
+      "enabledHint": "The launcher's own network requests (plugin market, version downloads, news, update checks, etc.) go through this proxy.",
+      "url": "Proxy URL (PROXY_URL)",
+      "port": "Port (PROXY_PORT)",
+      "noProxy": "Bypass list (NO_PROXY)",
+      "noProxyHint": "Comma-separated hosts / addresses that bypass the proxy.",
+      "applyDsh": "Apply in DSH",
+      "applyDshHint": "When enabled, launching an instance injects HTTP_PROXY / HTTPS_PROXY / NO_PROXY, overriding the instance's environment variables; instances that are already running must be restarted for this to take effect."
+    },
     "saved": "Settings saved",
     "homes": "DSH_HOME management",
     "homeName": "Name",
