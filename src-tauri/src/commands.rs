@@ -859,6 +859,76 @@ pub fn open_external(url: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Launch shortcut (issue #9)
+// ---------------------------------------------------------------------------
+
+/// Percent-encodes one URI query value (non-ASCII and reserved chars).
+fn uri_encode(value: &str) -> String {
+    let mut out = String::new();
+    for b in value.as_bytes() {
+        match *b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Writes a Windows Internet Shortcut (.url) that launches an instance via
+/// `dsh-launcher://launch?instance=<name>&profile=<profile>`. The shortcut
+/// icon is the instance icon when a local file exists, otherwise the
+/// launcher executable.
+#[tauri::command]
+pub fn create_launch_shortcut(
+    state: State<'_, AppState>,
+    instance_id: String,
+    profile: String,
+    dest_path: String,
+) -> Result<(), String> {
+    let cfg = state.config.lock().unwrap();
+    let inst = cfg
+        .instances
+        .iter()
+        .find(|i| i.id == instance_id)
+        .ok_or_else(|| "实例不存在".to_string())?;
+    let home = cfg
+        .homes
+        .iter()
+        .find(|h| h.id == inst.home_id)
+        .map(|h| h.path.clone())
+        .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+
+    let url = format!(
+        "dsh-launcher://launch?instance={}&profile={}",
+        uri_encode(&inst.name),
+        uri_encode(profile.trim()),
+    );
+    let icon_file = if inst.icon.as_deref() == Some("local") {
+        let p = crate::icons::local_icon_path(&home, &inst.id);
+        if p.exists() {
+            p
+        } else {
+            std::env::current_exe().map_err(|e| format!("获取启动器路径失败: {e}"))?
+        }
+    } else {
+        std::env::current_exe().map_err(|e| format!("获取启动器路径失败: {e}"))?
+    };
+    let content = format!(
+        "[InternetShortcut]\r\nURL={url}\r\nIconFile={}\r\nIconIndex=0\r\n",
+        icon_file.display()
+    );
+    let dest = std::path::PathBuf::from(dest_path.trim());
+    if dest.as_os_str().is_empty() {
+        return Err("保存路径不能为空".to_string());
+    }
+    std::fs::write(&dest, content).map_err(|e| format!("写入快捷方式失败: {e}"))?;
+    crate::log_info!("已创建启动快捷方式 {}", dest.display());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // News feed
 // ---------------------------------------------------------------------------
 

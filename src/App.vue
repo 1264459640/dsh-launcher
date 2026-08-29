@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useLauncherStore } from '@/stores/launcher'
 import type { ThemeMode } from '@/api/types'
 import { api } from '@/api'
+import { Message } from '@arco-design/web-vue'
 import ModpackImportDialog from '@/components/ModpackImportDialog.vue'
 
 const route = useRoute()
@@ -73,15 +74,37 @@ async function setupModpackEntryPoints() {
   unlistenDeepLink = await listen<string>('deep-link', (event) => handleDeepLink(event.payload))
 }
 
-/** dsh-launcher://pack?url=<tgz> → open the modpack import dialog. */
+/** dsh-launcher://pack?url=<tgz> → modpack import; dsh-launcher://launch → start instance. */
 function handleDeepLink(raw: string) {
   try {
     const u = new URL(raw)
-    if (u.protocol !== 'dsh-launcher:' || u.host !== 'pack') return
-    const packUrl = u.searchParams.get('url')
-    if (packUrl) openModpackImport(packUrl)
+    if (u.protocol !== 'dsh-launcher:') return
+    if (u.host === 'pack') {
+      const packUrl = u.searchParams.get('url')
+      if (packUrl) openModpackImport(packUrl)
+    } else if (u.host === 'launch') {
+      void launchFromDeepLink(u)
+    }
   } catch {
     // Not a URL we understand; ignore.
+  }
+}
+
+/** dsh-launcher://launch?instance=<name|id>&profile=<name> (issue #9). */
+async function launchFromDeepLink(u: URL) {
+  const ref = u.searchParams.get('instance')
+  if (!ref) return
+  const inst = store.instances.find((i) => i.id === ref || i.name === ref)
+  if (!inst) {
+    Message.error(t('modpackLaunch.instanceNotFound', { name: ref }))
+    return
+  }
+  const profile = u.searchParams.get('profile') || inst.default_profile || 'web'
+  try {
+    await api.startInstance(inst.id, profile)
+    await api.openInstanceWindow(inst.id)
+  } catch (e) {
+    Message.error(String(e))
   }
 }
 

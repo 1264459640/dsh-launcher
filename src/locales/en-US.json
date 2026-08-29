@@ -251,6 +251,8 @@
     "iconClear": "Reset",
     "iconUpdated": "Instance icon updated",
     "iconHint": "Local images are center-cropped to 1:1 and stored in the instance directory; the launcher icon is the default and is never exported",
+    "createShortcut": "Create shortcut",
+    "shortcutCreated": "Shortcut created: {path}",
     "save": "Save",
     "cancel": "Cancel",
     "saved": "Instance saved",
@@ -289,6 +291,9 @@
     "instanceName": "Instance name",
     "profileName": "Profile name",
     "force": "Overwrite the profile if it exists"
+  },
+  "modpackLaunch": {
+    "instanceNotFound": "Instance \"{name}\" not found"
   },
   "tasks": {
     "title": "Task Manager",

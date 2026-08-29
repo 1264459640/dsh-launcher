@@ -56,12 +56,21 @@ pub fn run() {
         // Single instance first: a second launch (e.g. browser protocol
         // activation) forwards its argv to the running instance and exits.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.unminimize();
-                let _ = win.set_focus();
+            let link = deep_link_from_args(&argv);
+            // launch links are headless: start the instance without popping
+            // the launcher window up (issue #9).
+            let is_launch = link
+                .as_deref()
+                .map(|u| u.starts_with("dsh-launcher://launch"))
+                .unwrap_or(false);
+            if !is_launch {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.unminimize();
+                    let _ = win.set_focus();
+                }
             }
-            if let Some(url) = deep_link_from_args(&argv) {
+            if let Some(url) = link {
                 crate::log_info!("单实例转发 deep link: {url}");
                 let _ = app.emit("deep-link", url);
             }
@@ -89,6 +98,16 @@ pub fn run() {
                         let _ = handle.emit("deep-link", url.to_string());
                     }
                 });
+            }
+            // Cold start from a launch shortcut stays silent: hide the main
+            // window and let the frontend start the instance (issue #9).
+            if deep_link_from_args(&std::env::args().collect::<Vec<_>>())
+                .map(|u| u.starts_with("dsh-launcher://launch"))
+                .unwrap_or(false)
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
             }
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -174,6 +193,7 @@ pub fn run() {
             commands::list_instance_status,
             commands::open_instance_window,
             commands::open_external,
+            commands::create_launch_shortcut,
             pending_deep_link,
             icons::set_instance_icon,
             icons::clear_instance_icon,

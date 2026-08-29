@@ -377,6 +377,25 @@ async function confirmExportModpack() {
   }
 }
 
+// --- Launch shortcut (issue #9) -----------------------------------------------
+
+/** Writes a dsh-launcher://launch .url shortcut for this instance + profile. */
+async function createShortcut(profile: string) {
+  if (!editingId.value) return
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const dest = await save({
+    defaultPath: `${name.value.trim() || 'instance'}-${profile}.url`,
+    filters: [{ name: 'Shortcut', extensions: ['url'] }],
+  })
+  if (typeof dest !== 'string') return
+  try {
+    await api.createLaunchShortcut(editingId.value, profile, dest)
+    Message.success(t('instanceEdit.shortcutCreated', { path: dest }))
+  } catch (e) {
+    Message.error(String(e))
+  }
+}
+
 // --- Plugins tab ---------------------------------------------------------------
 
 const pluginProfile = ref<string>('')
@@ -675,6 +694,7 @@ const terminalRunning = ref(false)
                     <a-button size="small" @click="startRenameProfile(p)">{{ t('instanceEdit.profileRename') }}</a-button>
                     <a-button size="small" @click="startCopyProfile(p)">{{ t('instanceEdit.profileCopy') }}</a-button>
                     <a-button size="small" @click="startExportModpack(p)">{{ t('instanceEdit.modpackExport') }}</a-button>
+                    <a-button size="small" @click="createShortcut(p)">{{ t('instanceEdit.createShortcut') }}</a-button>
                     <a-button
                       v-if="defaultProfile !== p"
                       size="small"

@@ -544,6 +544,8 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       return 'task-mock-modpack' as T
     case 'pending_deep_link':
       return null as T
+    case 'create_launch_shortcut':
+      return undefined as T
     case 'set_instance_icon':
     case 'clear_instance_icon':
       return undefined as T
@@ -809,6 +811,9 @@ export const api = {
   readModpackManifest: (source: string) => call<ModpackManifest>('read_modpack_manifest', { source }),
   /** Cold-start deep link from process argv (null when launched normally). */
   pendingDeepLink: () => call<string | null>('pending_deep_link'),
+  /** Writes a Windows .url shortcut launching an instance via dsh-launcher://launch. */
+  createLaunchShortcut: (instanceId: string, profile: string, destPath: string) =>
+    call<void>('create_launch_shortcut', { instanceId, profile, destPath }),
   /** Imports a modpack (.tgz path or URL) as a background task creating a new instance. */
   startImportModpackTask: (input: ImportModpackInput) =>
     call<string>('start_import_modpack_task', { input }),
