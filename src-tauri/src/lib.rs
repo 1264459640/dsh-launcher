@@ -2,6 +2,7 @@ mod applog;
 mod commands;
 mod config;
 mod doctor;
+mod icons;
 mod modpack;
 mod plugins;
 mod process;
@@ -174,6 +175,9 @@ pub fn run() {
             commands::open_instance_window,
             commands::open_external,
             pending_deep_link,
+            icons::set_instance_icon,
+            icons::clear_instance_icon,
+            icons::read_instance_icon,
             commands::get_settings,
             commands::update_settings,
             commands::fetch_news,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
@@ -15,13 +15,39 @@ const store = useLauncherStore()
 const modpackImportVisible = ref(false)
 
 const columns = computed(() => [
-  { title: t('instances.table.name'), dataIndex: 'name', width: 180 },
+  { title: t('instances.table.name'), slotName: 'name', width: 220 },
   { title: t('instances.table.version'), slotName: 'version', width: 140 },
   { title: t('instances.table.home'), slotName: 'home', width: 180 },
   { title: t('instances.table.profile'), slotName: 'profile', width: 120 },
   { title: t('instances.table.status'), slotName: 'status' },
   { title: t('instances.table.actions'), slotName: 'actions', width: 200, align: 'center' as const },
 ])
+
+// --- Instance icons (issue #8): resolved lazily per instance -------------------
+
+const iconMap = ref<Record<string, string | null>>({})
+
+async function loadIcons() {
+  const next: Record<string, string | null> = {}
+  for (const inst of store.instances) {
+    if (!inst.icon) {
+      next[inst.id] = null
+      continue
+    }
+    try {
+      next[inst.id] = await api.readInstanceIcon(inst.id)
+    } catch {
+      next[inst.id] = null
+    }
+  }
+  iconMap.value = next
+}
+
+watch(
+  () => store.instances.map((i) => `${i.id}:${i.icon ?? ''}`).join(','),
+  loadIcons,
+  { immediate: true },
+)
 
 function stateColor(state: InstanceState): string {
   switch (state) {
@@ -116,6 +142,13 @@ async function onOpenWindow(id: string) {
       </div>
 
       <a-table :columns="columns" :data="store.instances" :pagination="false" row-key="id">
+        <template #name="{ record }">
+          <span class="inst-name">
+            <img v-if="iconMap[record.id]" :src="iconMap[record.id]!" class="inst-icon" alt="" />
+            <span v-else class="inst-icon inst-icon-default">DSH</span>
+            {{ record.name }}
+          </span>
+        </template>
         <template #version="{ record }">
           {{ store.versionById(record.version_id)?.version ?? record.version_id }}
         </template>
@@ -205,6 +238,30 @@ async function onOpenWindow(id: string) {
 </template>
 
 <style lang="scss" scoped>
+.inst-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inst-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.inst-icon-default {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #4d6bfe, #165dff);
+}
+
 .status-url {
   margin-left: 8px;
   font-size: 12px;

@@ -544,6 +544,11 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       return 'task-mock-modpack' as T
     case 'pending_deep_link':
       return null as T
+    case 'set_instance_icon':
+    case 'clear_instance_icon':
+      return undefined as T
+    case 'read_instance_icon':
+      return null as T
     case 'read_modpack_manifest':
       return {
         manifestVersion: 3,
@@ -792,7 +797,13 @@ export const api = {
     call<string>('rename_profile', { home_id: homeId, old_name: oldName, new_name: newName }),
   deleteProfile: (homeId: string, name: string) =>
     call<void>('delete_profile', { home_id: homeId, name }),
-  /** Exports a profile as a modpack .tgz; resolves to the written path. */
+  /** Sets an instance icon from a local image path or http(s) URL. */
+  setInstanceIcon: (instanceId: string, source: string) =>
+    call<void>('set_instance_icon', { instanceId, source }),
+  /** Restores the launcher default icon for an instance. */
+  clearInstanceIcon: (instanceId: string) => call<void>('clear_instance_icon', { instanceId }),
+  /** Resolves the displayable icon (URL or data URL); null = launcher default. */
+  readInstanceIcon: (instanceId: string) => call<string | null>('read_instance_icon', { instanceId }),
   exportModpack: (input: ExportModpackInput) => call<string>('export_modpack', { input }),
   /** Pre-reads a modpack's manifest before installing (for the confirm dialog). */
   readModpackManifest: (source: string) => call<ModpackManifest>('read_modpack_manifest', { source }),

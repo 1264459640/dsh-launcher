@@ -257,6 +257,7 @@ pub fn create_instance(
         env_overrides: input.env_overrides,
         default_profile: input.default_profile,
         last_profile: None,
+        icon: None,
     };
     cfg.instances.push(inst.clone());
     save_state(&state, &cfg)?;
@@ -384,7 +385,7 @@ pub fn copy_instance(
         source.home_id.clone()
     };
 
-    let inst = DshInstance {
+    let mut inst = DshInstance {
         id: new_id("i"),
         name,
         version_id: source.version_id,
@@ -392,7 +393,36 @@ pub fn copy_instance(
         env_overrides: source.env_overrides.clone(),
         default_profile: source.default_profile.clone(),
         last_profile: None,
+        icon: source.icon.clone(),
     };
+    // A local icon is stored per instance id; copy the file for the clone,
+    // falling back to the launcher default when it cannot be carried over.
+    if source.icon.as_deref() == Some("local") {
+        let src_home = cfg
+            .homes
+            .iter()
+            .find(|h| h.id == source.home_id)
+            .map(|h| h.path.clone());
+        let dst_home = cfg
+            .homes
+            .iter()
+            .find(|h| h.id == inst.home_id)
+            .map(|h| h.path.clone());
+        let copied = match (src_home, dst_home) {
+            (Some(src_home), Some(dst_home)) => {
+                let src_icon = crate::icons::local_icon_path(&src_home, &source.id);
+                let dst_icon = crate::icons::local_icon_path(&dst_home, &inst.id);
+                if let Some(parent) = dst_icon.parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                src_icon.exists() && std::fs::copy(&src_icon, &dst_icon).is_ok()
+            }
+            _ => false,
+        };
+        if !copied {
+            inst.icon = None;
+        }
+    }
     cfg.instances.push(inst.clone());
     save_state(&state, &cfg)?;
     Ok(inst)

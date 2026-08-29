@@ -1,0 +1,205 @@
+//! Instance icons (issue #8): an instance may carry a custom icon — an
+//! http(s) URL or a local image copied into `<home>/icons/<id>.png`. Local
+//! images are center-cropped to a 1:1 square and re-encoded as PNG. The
+//! launcher icon stays the default and is never copied or exported.
+
+use std::path::{Path, PathBuf};
+
+use crate::AppState;
+use tauri::State;
+
+const ICON_MAX_BYTES: usize = 16 * 1024 * 1024;
+const ICON_SIZE: u32 = 256;
+
+/// Where a local icon lives inside the instance's HOME.
+pub(crate) fn local_icon_path(home: &Path, instance_id: &str) -> PathBuf {
+    home.join("icons").join(format!("{instance_id}.png"))
+}
+
+/// Crops the image to a centered 1:1 square and encodes it as PNG.
+pub(crate) fn crop_square_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let img = image::load_from_memory(bytes).map_err(|e| format!("解析图像失败: {e}"))?;
+    let (w, h) = (img.width(), img.height());
+    let side = w.min(h);
+    let cropped = img.crop_imm((w - side) / 2, (h - side) / 2, side, side);
+    let resized = if side > ICON_SIZE {
+        cropped.resize_exact(ICON_SIZE, ICON_SIZE, image::imageops::FilterType::Lanczos3)
+    } else {
+        cropped
+    };
+    let mut out = std::io::Cursor::new(Vec::new());
+    resized
+        .write_to(&mut out, image::ImageFormat::Png)
+        .map_err(|e| format!("编码 PNG 失败: {e}"))?;
+    Ok(out.into_inner())
+}
+
+/// Downloads an icon URL with a size cap.
+async fn fetch_icon(url: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent("dsh-launcher")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("下载图标失败 {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("下载图标失败 {url}: HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取图标失败: {e}"))?;
+    if bytes.len() > ICON_MAX_BYTES {
+        return Err("图标文件过大（超过 16 MiB）".to_string());
+    }
+    Ok(bytes.to_vec())
+}
+
+/// Validates that bytes decode as an image (used to sanity-check remote URLs
+/// that stay remote).
+fn ensure_decodable(bytes: &[u8]) -> Result<(), String> {
+    image::load_from_memory(bytes)
+        .map(|_| ())
+        .map_err(|e| format!("不是有效的图像文件: {e}"))
+}
+
+/// Downloads a remote icon and returns it as a cropped square PNG.
+pub(crate) async fn fetch_square_icon_png(url: &str) -> Result<Vec<u8>, String> {
+    let bytes = fetch_icon(url).await?;
+    crop_square_png(&bytes)
+}
+
+fn instance_home(state: &AppState, instance_id: &str) -> Result<PathBuf, String> {
+    let cfg = state.config.lock().unwrap();
+    let inst = cfg
+        .instances
+        .iter()
+        .find(|i| i.id == instance_id)
+        .ok_or_else(|| "实例不存在".to_string())?;
+    cfg.homes
+        .iter()
+        .find(|h| h.id == inst.home_id)
+        .map(|h| h.path.clone())
+        .ok_or_else(|| "DSH_HOME 不存在".to_string())
+}
+
+/// Sets an instance icon from a local image file or an http(s) URL. Local
+/// files are cropped to a square PNG inside the HOME; URLs are stored as-is
+/// after a decode sanity check.
+#[tauri::command]
+pub async fn set_instance_icon(
+    state: State<'_, AppState>,
+    instance_id: String,
+    source: String,
+) -> Result<(), String> {
+    let source = source.trim().to_string();
+    if source.is_empty() {
+        return Err("图标来源不能为空".to_string());
+    }
+    let home = instance_home(&state, &instance_id)?;
+
+    let icon = if source.starts_with("https://") || source.starts_with("http://") {
+        ensure_decodable(&fetch_icon(&source).await?)?;
+        source
+    } else {
+        let src = PathBuf::from(&source);
+        let bytes =
+            std::fs::read(&src).map_err(|e| format!("读取图标文件失败 {}: {e}", src.display()))?;
+        if bytes.len() > ICON_MAX_BYTES {
+            return Err("图标文件过大（超过 16 MiB）".to_string());
+        }
+        let png = crop_square_png(&bytes)?;
+        let dest = local_icon_path(&home, &instance_id);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建图标目录失败: {e}"))?;
+        }
+        std::fs::write(&dest, png).map_err(|e| format!("写入图标失败: {e}"))?;
+        "local".to_string()
+    };
+
+    let mut cfg = state.config.lock().unwrap();
+    let inst = cfg
+        .instances
+        .iter_mut()
+        .find(|i| i.id == instance_id)
+        .ok_or_else(|| "实例不存在".to_string())?;
+    inst.icon = Some(icon);
+    crate::commands::save_state(&state, &cfg)?;
+    Ok(())
+}
+
+/// Restores the default launcher icon and removes any local icon file.
+#[tauri::command]
+pub fn clear_instance_icon(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+    let home = instance_home(&state, &instance_id)?;
+    let mut cfg = state.config.lock().unwrap();
+    let inst = cfg
+        .instances
+        .iter_mut()
+        .find(|i| i.id == instance_id)
+        .ok_or_else(|| "实例不存在".to_string())?;
+    let was_local = inst.icon.as_deref() == Some("local");
+    inst.icon = None;
+    crate::commands::save_state(&state, &cfg)?;
+    drop(cfg);
+    if was_local {
+        let _ = std::fs::remove_file(local_icon_path(&home, &instance_id));
+    }
+    Ok(())
+}
+
+/// Resolves an instance icon for display: remote URLs pass through, local
+/// files become a `data:` URL, and `None` means the launcher default.
+#[tauri::command]
+pub fn read_instance_icon(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<Option<String>, String> {
+    let home = instance_home(&state, &instance_id)?;
+    let icon = {
+        let cfg = state.config.lock().unwrap();
+        cfg.instances
+            .iter()
+            .find(|i| i.id == instance_id)
+            .and_then(|i| i.icon.clone())
+    };
+    match icon.as_deref() {
+        None => Ok(None),
+        Some("local") => {
+            let bytes = std::fs::read(local_icon_path(&home, &instance_id))
+                .map_err(|e| format!("读取图标失败: {e}"))?;
+            Ok(Some(format!(
+                "data:image/png;base64,{}",
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+            )))
+        }
+        Some(url) => Ok(Some(url.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 4x2 red rectangle PNG, generated once for the crop test.
+    fn rect_png() -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(4, 2, image::Rgb([255, 0, 0]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn crop_square_centers_wide_images() {
+        let png = crop_square_png(&rect_png()).unwrap();
+        let img = image::load_from_memory(&png).unwrap();
+        assert_eq!(img.width(), img.height());
+        assert_eq!(img.width(), 2);
+    }
+}

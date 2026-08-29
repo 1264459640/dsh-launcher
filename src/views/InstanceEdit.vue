@@ -66,7 +66,68 @@ onMounted(async () => {
   homeId.value = inst.home_id
   defaultProfile.value = inst.default_profile ?? undefined
   envRows.value = Object.entries(inst.env_overrides).map(([key, value]) => ({ key, value }))
+  await loadIcon()
 })
+
+// --- Instance icon (issue #8) --------------------------------------------------
+
+const iconUrl = ref<string | null>(null)
+const iconInput = ref('')
+const iconBusy = ref(false)
+
+async function loadIcon() {
+  if (!editingId.value) return
+  try {
+    iconUrl.value = await api.readInstanceIcon(editingId.value)
+  } catch {
+    iconUrl.value = null
+  }
+}
+
+async function applyIconInput() {
+  if (!editingId.value || !iconInput.value.trim()) return
+  iconBusy.value = true
+  try {
+    await api.setInstanceIcon(editingId.value, iconInput.value.trim())
+    iconInput.value = ''
+    await loadIcon()
+    Message.success(t('instanceEdit.iconUpdated'))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    iconBusy.value = false
+  }
+}
+
+async function pickIconFile() {
+  if (!editingId.value) return
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const file = await open({
+    multiple: false,
+    filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
+  })
+  if (typeof file !== 'string') return
+  iconBusy.value = true
+  try {
+    await api.setInstanceIcon(editingId.value, file)
+    await loadIcon()
+    Message.success(t('instanceEdit.iconUpdated'))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    iconBusy.value = false
+  }
+}
+
+async function clearIcon() {
+  if (!editingId.value) return
+  try {
+    await api.clearInstanceIcon(editingId.value)
+    await loadIcon()
+  } catch (e) {
+    Message.error(String(e))
+  }
+}
 
 watch(homeId, async (v) => {
   profiles.value = []
@@ -479,6 +540,33 @@ const terminalRunning = ref(false)
                 <a-input v-model="name" :placeholder="t('instanceEdit.namePlaceholder')" style="max-width: 360px" />
               </a-form-item>
 
+              <a-form-item v-if="editingId" :label="t('instanceEdit.icon')">
+                <div class="icon-editor">
+                  <img v-if="iconUrl" :src="iconUrl" class="icon-preview" alt="" />
+                  <div v-else class="icon-preview icon-default">DSH</div>
+                  <div class="icon-actions">
+                    <a-input
+                      v-model="iconInput"
+                      :placeholder="t('instanceEdit.iconUrlHint')"
+                      allow-clear
+                      style="max-width: 300px"
+                    />
+                    <a-space>
+                      <a-button size="small" :loading="iconBusy" :disabled="!iconInput.trim()" @click="applyIconInput">
+                        {{ t('instanceEdit.iconApply') }}
+                      </a-button>
+                      <a-button size="small" :loading="iconBusy" @click="pickIconFile">
+                        {{ t('instanceEdit.iconPickFile') }}
+                      </a-button>
+                      <a-button v-if="iconUrl" size="small" status="danger" @click="clearIcon">
+                        {{ t('instanceEdit.iconClear') }}
+                      </a-button>
+                    </a-space>
+                    <p class="icon-hint">{{ t('instanceEdit.iconHint') }}</p>
+                  </div>
+                </div>
+              </a-form-item>
+
               <a-form-item :label="t('instanceEdit.version')" required>
                 <template v-if="store.versions.length">
                   <a-select v-model="versionId" style="max-width: 360px">
@@ -803,6 +891,42 @@ const terminalRunning = ref(false)
   </div>
 </template>
 <style lang="scss" scoped>
+.icon-editor {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.icon-preview {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border-2);
+}
+
+.icon-default {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #4d6bfe, #165dff);
+}
+
+.icon-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.icon-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
 .edit-page {
   display: flex;
   height: calc(100vh - var(--dl-header-height));

@@ -20,6 +20,8 @@ export interface DshInstance {
   env_overrides: Record<string, string>
   default_profile: string | null
   last_profile: string | null
+  /** http(s) URL, "local" (cropped PNG in the HOME), or null/undefined = launcher default. */
+  icon?: string | null
 }
 
 export interface LauncherSettings {

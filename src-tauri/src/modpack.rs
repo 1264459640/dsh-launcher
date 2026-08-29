@@ -331,9 +331,11 @@ pub async fn read_modpack_manifest(source: String) -> Result<ModpackManifest, St
 
 /// Exports a profile as a manifest-v3 modpack tgz. Dependencies are pinned:
 /// npm specs become the installed version, git specs become
-/// `github:owner/repo[#path:/sub]` → resolved commit sha.
+/// `github:owner/repo[#path:/sub]` → resolved commit sha. A custom instance
+/// icon (issue #8) is bundled as `icon.png`; the default launcher icon is
+/// never exported.
 #[tauri::command]
-pub fn export_modpack(
+pub async fn export_modpack(
     state: State<'_, AppState>,
     input: ExportModpackInput,
 ) -> Result<String, String> {
@@ -406,6 +408,35 @@ pub fn export_modpack(
         .unwrap_or_else(|| "1.0.0".to_string());
 
     let patch = std::fs::read_to_string(profile_dir.join("cordis.patch.yml")).ok();
+
+    // Instance icon (issue #8): bundle a cropped PNG as icon.png. A remote
+    // icon that cannot be fetched right now degrades to a URL reference.
+    let instance_icon = {
+        let cfg = state.config.lock().unwrap();
+        cfg.instances
+            .iter()
+            .find(|i| i.home_id == input.home_id)
+            .map(|i| (i.id.clone(), i.icon.clone()))
+    };
+    let mut icon_field: Option<String> = None;
+    let mut icon_png: Option<Vec<u8>> = None;
+    if let Some((inst_id, Some(icon))) = instance_icon {
+        if icon == "local" {
+            if let Ok(bytes) = std::fs::read(crate::icons::local_icon_path(&home, &inst_id)) {
+                icon_png = Some(bytes);
+                icon_field = Some("icon.png".to_string());
+            }
+        } else if icon.starts_with("http") {
+            match fetch_remote_icon(&icon).await {
+                Some(png) => {
+                    icon_png = Some(png);
+                    icon_field = Some("icon.png".to_string());
+                }
+                None => icon_field = Some(icon),
+            }
+        }
+    }
+
     let manifest = ModpackManifest {
         manifest_version: MANIFEST_VERSION,
         name: name.clone(),
@@ -416,7 +447,7 @@ pub fn export_modpack(
             .author
             .filter(|a| !a.trim().is_empty())
             .or_else(os_username),
-        icon: None,
+        icon: icon_field,
         dsh_version: Some(dsh_version),
         profile_name: Some(input.profile.clone()),
         bundles: bundles.clone(),
@@ -451,6 +482,9 @@ pub fn export_modpack(
     }
     if let Ok(ws) = std::fs::read(profile_dir.join("pnpm-workspace.yaml")) {
         files.push(("pnpm-workspace.yaml", ws));
+    }
+    if let Some(png) = icon_png {
+        files.push(("icon.png", png));
     }
 
     let out = write_modpack_tgz(
@@ -804,11 +838,36 @@ async fn do_import_modpack(
             env_overrides: Default::default(),
             default_profile: Some(profile_name.clone()),
             last_profile: None,
+            icon: None,
         };
         cfg.instances.push(inst.clone());
         crate::commands::save_state(state, &cfg)?;
         inst.id
     };
+
+    // 8. Modpack icon (issue #8): a bundled icon.png becomes the instance's
+    //    local icon; an http(s) manifest icon stays a remote reference.
+    let imported_icon: Option<String> = if unpacked.join("icon.png").exists() {
+        let dest = crate::icons::local_icon_path(&home, &instance_id);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::copy(unpacked.join("icon.png"), &dest)
+            .map(|_| "local".to_string())
+            .ok()
+    } else {
+        manifest
+            .icon
+            .clone()
+            .filter(|i| i.starts_with("https://") || i.starts_with("http://"))
+    };
+    if let Some(icon) = imported_icon {
+        let mut cfg = state.config.lock().unwrap();
+        if let Some(inst) = cfg.instances.iter_mut().find(|i| i.id == instance_id) {
+            inst.icon = Some(icon);
+            crate::commands::save_state(state, &cfg)?;
+        }
+    }
 
     crate::log_info!(
         "整合包 {} 已导入为实例「{}」（profile「{}」）",
@@ -837,6 +896,18 @@ fn dedupe_instance_name(cfg: &crate::config::Config, base: &str) -> String {
             return candidate;
         }
         n += 1;
+    }
+}
+
+/// Downloads and square-crops a remote icon for bundling; `None` on failure
+/// (the exporter then falls back to referencing the URL).
+async fn fetch_remote_icon(url: &str) -> Option<Vec<u8>> {
+    match crate::icons::fetch_square_icon_png(url).await {
+        Ok(png) => Some(png),
+        Err(e) => {
+            crate::log_warn!("导出整合包：下载实例图标失败 {url}: {e}");
+            None
+        }
     }
 }
 

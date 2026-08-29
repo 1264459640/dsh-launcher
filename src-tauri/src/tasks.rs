@@ -358,6 +358,7 @@ async fn do_create_instance(
             env_overrides: Default::default(),
             default_profile: None,
             last_profile: None,
+            icon: None,
         };
         cfg.instances.push(inst.clone());
         crate::commands::save_state(state, &cfg)?;

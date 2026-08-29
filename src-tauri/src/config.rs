@@ -33,6 +33,10 @@ pub struct DshInstance {
     pub default_profile: Option<String>,
     #[serde(default)]
     pub last_profile: Option<String>,
+    /// Instance icon: an http(s) URL, or "local" for a cropped PNG stored at
+    /// `<home>/icons/<id>.png`. `None` falls back to the launcher icon.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
