@@ -286,6 +286,7 @@
     "skillInstallSelected": "Install {count} selected",
     "skillRepoDialogTitle": "Install skills from repositories",
     "skillFilterPlaceholder": "Filter by name / description",
+    "skillSourceAll": "All sources",
     "skillCustomRepoPlaceholder": "Or paste another repo URL and press Enter to load",
     "skillLoadRepo": "Load",
     "skillRepoEmpty": "No skills — add SKILL repositories in launcher settings first",

@@ -9,6 +9,7 @@ import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
 import type { RepoSkillInfo } from '@/api/types'
 import { useLauncherStore } from '@/stores/launcher'
+import { shortRepoName } from '@/utils/repo'
 
 const props = defineProps<{
   visible: boolean
@@ -33,20 +34,32 @@ const rows = ref<RepoSkillRow[]>([])
 const loading = ref(false)
 const installing = ref(false)
 const filter = ref('')
+const sourceFilter = ref('')
 const selectedKeys = ref<string[]>([])
 const customUrl = ref('')
 /** Repo URL → load error message. */
 const errors = ref<Record<string, string>>({})
 
+/** Distinct source repos currently loaded, as select options. */
+const repoOptions = computed(() => {
+  const seen = new Map<string, string>()
+  for (const r of rows.value) {
+    if (!seen.has(r.repo)) seen.set(r.repo, shortRepoName(r.repo))
+  }
+  return [...seen.entries()].map(([value, label]) => ({ value, label }))
+})
+
 const filteredRows = computed(() => {
   const q = filter.value.trim().toLowerCase()
-  if (!q) return rows.value
-  return rows.value.filter(
-    (r) =>
+  return rows.value.filter((r) => {
+    if (sourceFilter.value && r.repo !== sourceFilter.value) return false
+    if (!q) return true
+    return (
       r.name.toLowerCase().includes(q) ||
       r.description.toLowerCase().includes(q) ||
-      r.repo.toLowerCase().includes(q),
-  )
+      r.repo.toLowerCase().includes(q)
+    )
+  })
 })
 
 async function loadRepo(url: string) {
@@ -125,7 +138,7 @@ async function installSelected() {
 const columns = computed(() => [
   { title: t('instanceEdit.skillColName'), dataIndex: 'name', width: 200 },
   { title: t('instanceEdit.skillColDesc'), dataIndex: 'description', ellipsis: true, tooltip: { position: 'top' } },
-  { title: t('instanceEdit.skillColRepo'), dataIndex: 'repo', width: 220, ellipsis: true, tooltip: true },
+  { title: t('instanceEdit.skillColRepo'), dataIndex: 'repo', slotName: 'repo', width: 220, ellipsis: true },
 ])
 </script>
 
@@ -141,6 +154,14 @@ const columns = computed(() => [
     @cancel="emit('update:visible', false)"
   >
     <div class="skill-dialog-tools">
+      <a-select
+        v-model="sourceFilter"
+        :placeholder="t('instanceEdit.skillSourceAll')"
+        allow-clear
+        class="skill-source-select"
+      >
+        <a-option v-for="o in repoOptions" :key="o.value" :value="o.value" :label="o.label" />
+      </a-select>
       <a-input
         v-model="filter"
         :placeholder="t('instanceEdit.skillFilterPlaceholder')"
@@ -166,7 +187,7 @@ const columns = computed(() => [
       type="warning"
       class="skill-repo-error"
     >
-      {{ repo }}: {{ msg }}
+      {{ shortRepoName(repo) }}: {{ msg }}
     </a-alert>
 
     <a-table
@@ -180,6 +201,11 @@ const columns = computed(() => [
       size="small"
       :scroll="{ y: 380 }"
     >
+      <template #repo="{ record }">
+        <a-tooltip :content="record.repo">
+          <span>{{ shortRepoName(record.repo) }}</span>
+        </a-tooltip>
+      </template>
       <template #empty>
         <a-empty :description="t('instanceEdit.skillRepoEmpty')" />
       </template>
@@ -192,6 +218,11 @@ const columns = computed(() => [
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.skill-source-select {
+  flex: none;
+  width: 200px;
 }
 
 .skill-repo-error {

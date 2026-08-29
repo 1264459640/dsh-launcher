@@ -16,6 +16,7 @@ import type {
 } from '@/api/types'
 import TerminalEmbed from './TerminalEmbed.vue'
 import SkillRepoDialog from '@/components/SkillRepoDialog.vue'
+import { shortRepoName } from '@/utils/repo'
 
 const route = useRoute()
 const router = useRouter()
@@ -1363,7 +1364,7 @@ const terminalRunning = ref(false)
                   <template v-if="record.origin">
                     <a-tag size="small" color="blue">{{ record.origin.tag ?? record.origin.commit.slice(0, 7) }}</a-tag>
                     <a-tooltip :content="record.origin.repo">
-                      <span class="skill-repo-ref">{{ record.origin.repo }}</span>
+                      <span class="skill-repo-ref">{{ shortRepoName(record.origin.repo) }}</span>
                     </a-tooltip>
                     <a-tag v-if="skillUpdateOf(record.name)" size="small" color="orange">
                       {{ t('instanceEdit.skillHasUpdate', { version: skillUpdateOf(record.name)!.latest }) }}

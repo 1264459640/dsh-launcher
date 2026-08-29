@@ -286,6 +286,7 @@
     "skillInstallSelected": "安装选中的 {count} 个",
     "skillRepoDialogTitle": "从仓库安装 SKILL",
     "skillFilterPlaceholder": "按名称 / 描述筛选",
+    "skillSourceAll": "全部来源",
     "skillCustomRepoPlaceholder": "或粘贴其他仓库地址后回车加载",
     "skillLoadRepo": "加载",
     "skillRepoEmpty": "暂无 SKILL — 请先在启动器设置中添加 SKILL 仓库",
