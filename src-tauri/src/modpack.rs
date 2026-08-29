@@ -457,7 +457,11 @@ pub async fn export_modpack(
                     .map(|(_, name, _)| serde_json::Value::String(name.clone()))
             }),
         version: version.clone(),
-        description: Some(input.description.unwrap_or_else(|| serde_json::Value::String(String::new()))),
+        description: Some(
+            input
+                .description
+                .unwrap_or_else(|| serde_json::Value::String(String::new())),
+        ),
         author: input
             .author
             .filter(|a| !a.trim().is_empty())

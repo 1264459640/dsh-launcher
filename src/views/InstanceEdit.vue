@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { Message } from '@arco-design/web-vue'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
-import type { DshInstance, InstalledPlugin } from '@/api/types'
+import type { DshInstance, InstalledPlugin, SkillInfo } from '@/api/types'
 import TerminalEmbed from './TerminalEmbed.vue'
 
 const route = useRoute()
@@ -18,7 +18,7 @@ const isNew = computed(() => !editingId.value)
 
 // --- Sidebar tabs ---------------------------------------------------------------
 
-type TabKey = 'basic' | 'env' | 'profiles' | 'plugins' | 'terminal'
+type TabKey = 'basic' | 'env' | 'profiles' | 'plugins' | 'skills' | 'terminal'
 const activeTab = ref<TabKey>('basic')
 
 // --- Form state ---------------------------------------------------------------
@@ -380,6 +380,120 @@ async function confirmExportModpack() {
   }
 }
 
+// --- SKILL tab (issue #10) ------------------------------------------------------
+
+const skills = ref<SkillInfo[]>([])
+const skillsLoading = ref(false)
+const skillRepoUrl = ref('')
+const skillRepoBusy = ref(false)
+const skillActionBusy = ref('')
+const skillCreateVisible = ref(false)
+const skillCreateForm = ref({ name: '', description: '', content: '' })
+const skillCreateBusy = ref(false)
+
+const skillColumns = computed(() => [
+  { title: t('instanceEdit.skillColName'), dataIndex: 'name', width: 180 },
+  { title: t('instanceEdit.skillColDesc'), dataIndex: 'description', ellipsis: true, tooltip: true },
+  { title: t('instanceEdit.skillColOrigin'), slotName: 'origin', width: 220 },
+  { title: t('instances.table.actions'), slotName: 'skillActions', width: 170, align: 'center' as const },
+])
+
+async function loadSkills() {
+  if (!homeId.value) return
+  skillsLoading.value = true
+  try {
+    skills.value = await api.listInstanceSkills(homeId.value)
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    skillsLoading.value = false
+  }
+}
+
+async function installSkillFromRepo() {
+  if (!homeId.value || !skillRepoUrl.value.trim()) return
+  skillRepoBusy.value = true
+  try {
+    const names = await api.installSkillRepo(homeId.value, skillRepoUrl.value.trim())
+    skillRepoUrl.value = ''
+    Message.success(t('instanceEdit.skillInstalled', { names: names.join(', ') }))
+    await loadSkills()
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    skillRepoBusy.value = false
+  }
+}
+
+async function onUpdateSkill(name: string) {
+  if (!homeId.value) return
+  skillActionBusy.value = name
+  try {
+    const version = await api.updateSkill(homeId.value, name)
+    Message.success(t('instanceEdit.skillUpdated', { name, version }))
+    await loadSkills()
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    skillActionBusy.value = ''
+  }
+}
+
+async function onDeleteSkill(name: string) {
+  if (!homeId.value) return
+  skillActionBusy.value = name
+  try {
+    await api.deleteSkill(homeId.value, name)
+    Message.success(t('instanceEdit.skillDeleted', { name }))
+    await loadSkills()
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    skillActionBusy.value = ''
+  }
+}
+
+async function onImportSkillFile() {
+  if (!homeId.value) return
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const file = await open({
+    multiple: false,
+    filters: [{ name: 'SKILL.md', extensions: ['md'] }],
+  })
+  if (typeof file !== 'string') return
+  skillRepoBusy.value = true
+  try {
+    const name = await api.importSkillFile(homeId.value, file)
+    Message.success(t('instanceEdit.skillInstalled', { names: name }))
+    await loadSkills()
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    skillRepoBusy.value = false
+  }
+}
+
+async function onCreateSkill() {
+  if (!homeId.value || !skillCreateForm.value.name.trim()) return
+  skillCreateBusy.value = true
+  try {
+    const name = await api.createSkill(
+      homeId.value,
+      skillCreateForm.value.name.trim(),
+      skillCreateForm.value.description.trim(),
+      skillCreateForm.value.content,
+    )
+    skillCreateVisible.value = false
+    skillCreateForm.value = { name: '', description: '', content: '' }
+    Message.success(t('instanceEdit.skillInstalled', { names: name }))
+    await loadSkills()
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    skillCreateBusy.value = false
+  }
+}
+
 // --- Launch shortcut (issue #9) -----------------------------------------------
 
 /** Writes a dsh-launcher://launch .url shortcut for this instance + profile. */
@@ -427,6 +541,10 @@ watch([pluginProfile, homeId], async () => {
 // 进入插件页时若未选择 Profile：优先选中实例的默认 Profile；若实例没有
 // 设置默认 Profile，则选中找到的第一个 Profile。
 watch(activeTab, async (tab) => {
+  if (tab === 'skills') {
+    await loadSkills()
+    return
+  }
   if (tab !== 'plugins') return
   if (pluginProfile.value) return
   if (profiles.value.length === 0) return
@@ -549,6 +667,7 @@ const terminalRunning = ref(false)
         <a-menu-item key="env">{{ t('instanceEdit.tabs.env') }}</a-menu-item>
         <a-menu-item key="profiles">{{ t('instanceEdit.tabs.profiles') }}</a-menu-item>
         <a-menu-item key="plugins">{{ t('instanceEdit.tabs.plugins') }}</a-menu-item>
+        <a-menu-item key="skills">{{ t('instanceEdit.tabs.skills') }}</a-menu-item>
         <a-menu-item key="terminal">{{ t('instanceEdit.tabs.terminal') }}</a-menu-item>
       </a-menu>
     </aside>
@@ -853,6 +972,90 @@ const terminalRunning = ref(false)
             </a-alert>
           </div>
 
+          <!-- SKILL -->
+          <div v-else-if="activeTab === 'skills'" class="dl-card edit-card">
+            <h4 class="env-title">{{ t('instanceEdit.tabs.skills') }}</h4>
+            <p class="env-desc">{{ t('instanceEdit.skillsDesc') }}</p>
+
+            <template v-if="homeId && editingId">
+              <div class="skill-toolbar">
+                <a-select
+                  v-model="skillRepoUrl"
+                  allow-create
+                  allow-clear
+                  filterable
+                  :placeholder="t('instanceEdit.skillRepoPlaceholder')"
+                  class="skill-repo-select"
+                >
+                  <a-option v-for="r in store.settings.skill_repos" :key="r" :value="r">
+                    {{ r }}
+                  </a-option>
+                </a-select>
+                <a-button
+                  size="small"
+                  type="primary"
+                  :loading="skillRepoBusy"
+                  :disabled="!skillRepoUrl.trim()"
+                  @click="installSkillFromRepo"
+                >
+                  {{ t('instanceEdit.skillInstall') }}
+                </a-button>
+                <a-button size="small" @click="onImportSkillFile">
+                  {{ t('instanceEdit.skillImportFile') }}
+                </a-button>
+                <a-button size="small" @click="skillCreateVisible = true">
+                  {{ t('instanceEdit.skillCreate') }}
+                </a-button>
+              </div>
+
+              <a-table
+                :columns="skillColumns"
+                :data="skills"
+                :loading="skillsLoading"
+                :pagination="false"
+                row-key="name"
+                size="small"
+              >
+                <template #origin="{ record }">
+                  <template v-if="record.origin">
+                    <a-tag size="small" color="blue">{{ record.origin.tag ?? record.origin.commit.slice(0, 7) }}</a-tag>
+                    <a-tooltip :content="record.origin.repo">
+                      <span class="skill-repo-ref">{{ record.origin.repo }}</span>
+                    </a-tooltip>
+                  </template>
+                  <span v-else class="skill-repo-ref">—</span>
+                </template>
+                <template #skillActions="{ record }">
+                  <a-space>
+                    <a-button
+                      v-if="record.origin"
+                      size="small"
+                      :loading="skillActionBusy === record.name"
+                      @click="onUpdateSkill(record.name)"
+                    >
+                      {{ t('instanceEdit.skillUpdate') }}
+                    </a-button>
+                    <a-popconfirm
+                      :content="t('instanceEdit.skillDeleteConfirm', { name: record.name })"
+                      @ok="onDeleteSkill(record.name)"
+                    >
+                      <a-button size="small" status="danger" :loading="skillActionBusy === record.name">
+                        {{ t('instances.table.delete') }}
+                      </a-button>
+                    </a-popconfirm>
+                  </a-space>
+                </template>
+                <template #empty>
+                  <a-empty :description="t('instanceEdit.skillsEmpty')" />
+                </template>
+              </a-table>
+            </template>
+
+            <a-alert v-else type="info">
+              {{ t('instanceEdit.profilesNeedHome') }}
+            </a-alert>
+          </div>
+
           <!-- Terminal -->
           <div v-else class="dl-card edit-card">
             <h4 class="env-title">{{ t('instanceEdit.tabs.terminal') }}</h4>
@@ -911,9 +1114,51 @@ const terminalRunning = ref(false)
       </a-form>
     </a-modal>
 
+    <!-- SKILL create -->
+    <a-modal
+      v-model:visible="skillCreateVisible"
+      :title="t('instanceEdit.skillCreateTitle')"
+      :ok-loading="skillCreateBusy"
+      :ok-button-props="{ disabled: !skillCreateForm.name.trim() || !skillCreateForm.content.trim() }"
+      @ok="onCreateSkill"
+    >
+      <a-form :model="skillCreateForm" layout="vertical">
+        <a-form-item :label="t('instanceEdit.skillName')" required>
+          <a-input v-model="skillCreateForm.name" placeholder="my-skill" />
+        </a-form-item>
+        <a-form-item :label="t('instanceEdit.skillDescription')">
+          <a-input v-model="skillCreateForm.description" />
+        </a-form-item>
+        <a-form-item :label="t('instanceEdit.skillContent')" required>
+          <a-textarea
+            v-model="skillCreateForm.content"
+            :auto-size="{ minRows: 6, maxRows: 14 }"
+            :placeholder="t('instanceEdit.skillContentHint')"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
   </div>
 </template>
 <style lang="scss" scoped>
+.skill-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.skill-repo-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-repo-ref {
+  font-size: 12px;
+  color: var(--color-text-3);
+  margin-left: 6px;
+}
 .icon-editor {
   display: flex;
   gap: 16px;

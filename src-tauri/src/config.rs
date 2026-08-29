@@ -58,6 +58,10 @@ pub struct LauncherSettings {
     /// Runtime log level: "debug" | "info" | "warn" | "error".
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// SKILL source repositories (issue #10):
+    /// `https://[user:password@]github.com/user/repo[.git][#/path/to/skill]`.
+    #[serde(default)]
+    pub skill_repos: Vec<String>,
 }
 
 fn default_locale() -> String {
@@ -91,6 +95,7 @@ impl Default for LauncherSettings {
             news_source: default_news_source(),
             theme: default_theme(),
             log_level: default_log_level(),
+            skill_repos: Vec::new(),
         }
     }
 }
@@ -150,6 +155,8 @@ pub struct SettingsPatch {
     pub theme: Option<String>,
     #[serde(default)]
     pub log_level: Option<String>,
+    #[serde(default)]
+    pub skill_repos: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

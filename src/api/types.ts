@@ -32,6 +32,8 @@ export interface LauncherSettings {
   news_source: string
   theme: ThemeMode
   log_level: LogLevel
+  /** SKILL source repos: https://[user:password@]github.com/user/repo[.git][#/path/to/skill] */
+  skill_repos: string[]
 }
 
 /** UI theme: explicit light/dark, or follow the OS color scheme. */
@@ -161,6 +163,21 @@ export interface ImportModpackInput {
   profile_name?: string
   /** Import into this existing instance instead of creating a new one. */
   existing_instance_id?: string
+}
+
+/** Repo origin recorded for an installed skill. */
+export interface SkillOrigin {
+  repo: string
+  commit: string
+  tag?: string | null
+}
+
+export interface SkillInfo {
+  name: string
+  description: string
+  /** "dir" bundle or flat "file". */
+  kind: string
+  origin?: SkillOrigin | null
 }
 
 export interface NewInstanceInput {

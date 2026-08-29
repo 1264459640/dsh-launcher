@@ -95,6 +95,31 @@ async function onNewsSourceSave() {
   await patchSettings({ news_source: value })
 }
 
+// --- SKILL source repos (issue #10) ---------------------------------------------
+
+const newSkillRepo = ref('')
+const skillRepoBusy = ref(false)
+
+async function onAddSkillRepo() {
+  const url = newSkillRepo.value.trim()
+  if (!url) return
+  if (store.settings.skill_repos.includes(url)) {
+    Message.warning(t('settings.skillRepoExists'))
+    return
+  }
+  skillRepoBusy.value = true
+  try {
+    await patchSettings({ skill_repos: [...store.settings.skill_repos, url] })
+    newSkillRepo.value = ''
+  } finally {
+    skillRepoBusy.value = false
+  }
+}
+
+async function onRemoveSkillRepo(url: string) {
+  await patchSettings({ skill_repos: store.settings.skill_repos.filter((r) => r !== url) })
+}
+
 // --- DSH_HOME management ------------------------------------------------------
 
 const newHomeName = ref('')
@@ -206,6 +231,39 @@ const homeColumns = computed(() => [
 
     <div class="dl-card">
       <div class="dl-card-title">
+        <h3>{{ t('settings.skillRepos.title') }}</h3>
+      </div>
+      <p class="news-source-hint">{{ t('settings.skillRepos.hint') }}</p>
+      <div class="skill-repo-add">
+        <a-input
+          v-model="newSkillRepo"
+          :placeholder="t('settings.skillRepos.placeholder')"
+          allow-clear
+          @press-enter="onAddSkillRepo"
+        />
+        <a-button :loading="skillRepoBusy" :disabled="!newSkillRepo.trim()" @click="onAddSkillRepo">
+          {{ t('settings.skillRepos.add') }}
+        </a-button>
+      </div>
+      <a-list :data="store.settings.skill_repos" size="small">
+        <template #item="{ item }">
+          <a-list-item>
+            <span class="skill-repo-url">{{ item }}</span>
+            <template #actions>
+              <a-button size="mini" status="danger" type="text" @click="onRemoveSkillRepo(item)">
+                {{ t('instances.table.delete') }}
+              </a-button>
+            </template>
+          </a-list-item>
+        </template>
+        <template #empty>
+          <a-empty :description="t('settings.skillRepos.empty')" />
+        </template>
+      </a-list>
+    </div>
+
+    <div class="dl-card">
+      <div class="dl-card-title">
         <h3>{{ t('settings.update.title') }}</h3>
       </div>
       <div class="update-row">
@@ -261,6 +319,16 @@ const homeColumns = computed(() => [
 </template>
 
 <style lang="scss" scoped>
+.skill-repo-add {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.skill-repo-url {
+  font-size: 13px;
+  word-break: break-all;
+}
 .settings-form {
   max-width: 560px;
 }

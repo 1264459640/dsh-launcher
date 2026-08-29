@@ -7,6 +7,7 @@ mod modpack;
 mod plugins;
 mod process;
 mod runtime;
+mod skills;
 mod tasks;
 mod terminal;
 mod tray;
@@ -198,6 +199,12 @@ pub fn run() {
             icons::set_instance_icon,
             icons::clear_instance_icon,
             icons::read_instance_icon,
+            skills::list_instance_skills,
+            skills::install_skill_repo,
+            skills::update_skill,
+            skills::delete_skill,
+            skills::import_skill_file,
+            skills::create_skill,
             commands::get_settings,
             commands::update_settings,
             commands::fetch_news,

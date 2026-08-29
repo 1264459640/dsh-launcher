@@ -18,6 +18,7 @@ import type {
   MarketPlugin,
   ModpackManifest,
   NewInstanceInput,
+  SkillInfo,
   PluginChannel,
   PluginVersionPage,
   RemoteVersion,
@@ -87,6 +88,7 @@ function seedDb(): MockDb {
       news_source: 'https://gist.githubusercontent.com/Gu-ZT/f08daa33afb82f4b375e604039b92742/raw/DSH_NEWS.md',
       theme: 'system',
       log_level: 'info',
+      skill_repos: ['https://github.com/Gu-ZT/skills'],
     },
     running: {},
   }
@@ -551,6 +553,28 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       return undefined as T
     case 'read_instance_icon':
       return null as T
+    case 'list_instance_skills':
+      return [
+        {
+          name: 'conventional-commits',
+          description: 'Conventional Commits 提交规范',
+          kind: 'dir',
+          origin: {
+            repo: 'https://github.com/Gu-ZT/skills#/conventional-commits',
+            commit: '0123456789abcdef0123456789abcdef01234567',
+            tag: null,
+          },
+        },
+      ] as T
+    case 'install_skill_repo':
+      return ['conventional-commits'] as T
+    case 'update_skill':
+      return 'v1.0.0' as T
+    case 'delete_skill':
+      return undefined as T
+    case 'import_skill_file':
+    case 'create_skill':
+      return 'my-skill' as T
     case 'read_modpack_manifest':
       return {
         manifestVersion: 3,
@@ -806,6 +830,20 @@ export const api = {
   clearInstanceIcon: (instanceId: string) => call<void>('clear_instance_icon', { instanceId }),
   /** Resolves the displayable icon (URL or data URL); null = launcher default. */
   readInstanceIcon: (instanceId: string) => call<string | null>('read_instance_icon', { instanceId }),
+  /** Lists skills in an instance HOME's skills directory. */
+  listInstanceSkills: (homeId: string) => call<SkillInfo[]>('list_instance_skills', { homeId }),
+  /** Installs skill(s) from a source repo URL; resolves to installed skill names. */
+  installSkillRepo: (homeId: string, url: string) =>
+    call<string[]>('install_skill_repo', { homeId, url }),
+  /** Reinstalls a repo-sourced skill from its origin; resolves to the new version. */
+  updateSkill: (homeId: string, name: string) => call<string>('update_skill', { homeId, name }),
+  deleteSkill: (homeId: string, name: string) => call<void>('delete_skill', { homeId, name }),
+  /** Imports a local SKILL.md into the HOME. */
+  importSkillFile: (homeId: string, path: string) =>
+    call<string>('import_skill_file', { homeId, path }),
+  /** Creates a skill from pasted content (frontmatter auto-added when missing). */
+  createSkill: (homeId: string, name: string, description: string, content: string) =>
+    call<string>('create_skill', { homeId, name, description, content }),
   exportModpack: (input: ExportModpackInput) => call<string>('export_modpack', { input }),
   /** Pre-reads a modpack's manifest before installing (for the confirm dialog). */
   readModpackManifest: (source: string) => call<ModpackManifest>('read_modpack_manifest', { source }),

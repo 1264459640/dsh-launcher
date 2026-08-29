@@ -840,6 +840,13 @@ pub fn update_settings(
             None => return Err(format!("无效的日志等级: {v}")),
         }
     }
+    if let Some(v) = settings.skill_repos {
+        cfg.settings.skill_repos = v
+            .into_iter()
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty())
+            .collect();
+    }
     let out = cfg.settings.clone();
     save_state(&state, &cfg)?;
     crate::log_debug!("设置已更新并保存");
