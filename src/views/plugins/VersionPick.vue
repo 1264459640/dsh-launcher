@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '@/api'
@@ -12,26 +12,36 @@ const store = useLauncherStore()
 
 const plugin = computed<MarketPlugin | null>(() => store.pluginWizard?.plugin ?? null)
 
-const channels: PluginChannel[] = ['stable', 'beta', 'alpha']
-
 const channelMeta: Record<PluginChannel, { letter: string; color: string }> = {
   stable: { letter: 'R', color: 'green' },
   beta: { letter: 'B', color: 'orange' },
   alpha: { letter: 'A', color: 'red' },
 }
 
-// Accumulated versions per channel (pages are appended for alpha).
+// Accumulated versions per channel (pages are appended for alpha); the UI
+// merges all channels into one list sorted by publish time.
 const versionsByChannel = ref<Record<PluginChannel, PluginVersionInfo[]>>({
   stable: [],
   beta: [],
   alpha: [],
 })
-// Pagination state per channel.
+// Pagination state per channel (only alpha actually pages).
 const hasMore = ref<Record<PluginChannel, boolean>>({ stable: false, beta: false, alpha: false })
 const loadingMore = ref<Record<PluginChannel, boolean>>({ stable: false, beta: false, alpha: false })
 const pagesLoaded = ref<Record<PluginChannel, number>>({ stable: 1, beta: 1, alpha: 1 })
 const loadingChannel = ref<PluginChannel | null>(null)
 const error = ref<string | null>(null)
+
+/** All channels merged into one list, newest first by publish time. */
+const mergedVersions = computed(() => {
+  const all = [
+    ...versionsByChannel.value.stable,
+    ...versionsByChannel.value.beta,
+    ...versionsByChannel.value.alpha,
+  ]
+  // Entries without a timestamp sort last; ties keep channel order.
+  return all.sort((a, b) => (b.published_at ?? '').localeCompare(a.published_at ?? ''))
+})
 
 async function loadChannel(ch: PluginChannel) {
   if (!plugin.value || loadingChannel.value === ch) return
@@ -46,6 +56,13 @@ async function loadChannel(ch: PluginChannel) {
   } finally {
     loadingChannel.value = null
   }
+}
+
+/** Reload every channel from its first page. */
+async function reloadAll() {
+  pagesLoaded.value = { stable: 1, beta: 1, alpha: 1 }
+  await Promise.all([loadChannel('stable'), loadChannel('beta')])
+  await loadChannel('alpha')
 }
 
 /** Load the next page for a channel, appending to the accumulated list. */
@@ -66,9 +83,9 @@ async function loadMore(ch: PluginChannel) {
   }
 }
 
-// --- Infinite scroll: an IntersectionObserver watches a sentinel at the
-// bottom of each channel card and loads the next page when it becomes
-// visible (i.e. the user scrolled near the end).
+// --- Infinite scroll: an IntersectionObserver watches the sentinel at the
+// bottom of the list and loads the next alpha page when it becomes visible
+// (i.e. the user scrolled near the end).
 
 const sentinels = new Map<PluginChannel, HTMLElement>()
 let observer: IntersectionObserver | null = null
@@ -104,10 +121,7 @@ onMounted(async () => {
     router.replace({ name: 'download-plugins' })
     return
   }
-  // Load stable + beta now; alpha loads lazily on scroll too (page 1 shows
-  // the HEAD commit immediately).
-  await Promise.all([loadChannel('stable'), loadChannel('beta')])
-  await loadChannel('alpha')
+  await reloadAll()
 })
 
 onBeforeUnmount(() => {
@@ -116,8 +130,8 @@ onBeforeUnmount(() => {
   sentinels.clear()
 })
 
-function pick(ch: PluginChannel, v: PluginVersionInfo) {
-  store.pluginWizard = { plugin: plugin.value!, channel: ch, version: v }
+function pick(v: PluginVersionInfo) {
+  store.pluginWizard = { plugin: plugin.value!, channel: v.channel, version: v }
   router.push({ name: 'plugin-install' })
 }
 
@@ -135,10 +149,6 @@ function displayVersion(v: PluginVersionInfo): string {
   }
   return v.version
 }
-
-const hasAny = computed(() =>
-  channels.some((ch) => versionsByChannel.value[ch].length > 0),
-)
 </script>
 
 <template>
@@ -158,70 +168,65 @@ const hasAny = computed(() =>
       <a-empty :description="t('plugins.noMatch')" />
     </div>
 
-    <template v-else>
-      <div v-for="ch in channels" :key="ch" class="dl-card channel-card">
-        <div class="dl-card-title">
-          <h3>
-            <span
-              class="channel-letter"
-              :style="{ background: channelMeta[ch].color }"
-            >{{ channelMeta[ch].letter }}</span>
-            {{ t(`plugins.channel.${ch}`) }}
-            <a-tag v-if="hasMore[ch]" size="small" color="arcoblue" class="lazy-tag">
-              {{ t('plugins.lazyLoad') }}
-            </a-tag>
-          </h3>
-          <a-button
-            size="small"
-            type="text"
-            :loading="loadingChannel === ch"
-            @click="loadChannel(ch)"
-          >
-            ⟳
-          </a-button>
-        </div>
-
-        <template v-if="versionsByChannel[ch].length">
-          <div
-            v-for="v in versionsByChannel[ch]"
-            :key="v.version"
-            class="version-row"
-            @click="pick(ch, v)"
-          >
-            <span
-              class="version-icon"
-              :style="{ background: channelMeta[ch].color }"
-            >{{ channelMeta[ch].letter }}</span>
-            <div class="version-meta">
-              <div class="version-name">
-                {{ displayVersion(v) }}
-                <a-tag v-if="v.is_default" size="small" color="green">
-                  {{ t('plugins.defaultTag') }}
-                </a-tag>
-              </div>
-              <div class="version-sub">{{ formatLabel(v) }}</div>
-            </div>
-            <span class="version-arrow">›</span>
-          </div>
-          <!-- Sentinel for infinite scroll: loads the next page when scrolled into view -->
-          <div
-            v-if="hasMore[ch]"
-            :ref="(el: unknown) => onSentinel(el, ch)"
-            :data-channel="String(ch)"
-            class="load-more-sentinel"
-          >
-            <a-spin v-if="loadingMore[ch]" :size="14" />
-            <span v-else class="load-more-hint">{{ t('plugins.scrollMore') }}</span>
-          </div>
-        </template>
-        <div v-else class="card-empty">
-          <template v-if="loadingChannel === ch">{{ t('common.loading') }}</template>
-          <template v-else>{{ t('plugins.noVersions') }}</template>
-        </div>
+    <div v-else class="dl-card channel-card">
+      <div class="dl-card-title">
+        <h3>
+          {{ t('plugins.chooseVersion') }}
+          <a-tag v-if="hasMore.alpha" size="small" color="arcoblue" class="lazy-tag">
+            {{ t('plugins.lazyLoad') }}
+          </a-tag>
+        </h3>
+        <a-button
+          size="small"
+          type="text"
+          :loading="loadingChannel !== null"
+          @click="reloadAll"
+        >
+          ⟳
+        </a-button>
       </div>
 
-      <a-empty v-if="!hasAny && !loadingChannel" :description="t('plugins.noVersions')" />
-    </template>
+      <template v-if="mergedVersions.length">
+        <div
+          v-for="v in mergedVersions"
+          :key="`${v.channel}:${v.version}`"
+          class="version-row"
+          @click="pick(v)"
+        >
+          <span
+            class="version-icon"
+            :style="{ background: channelMeta[v.channel].color }"
+          >{{ channelMeta[v.channel].letter }}</span>
+          <div class="version-meta">
+            <div class="version-name">
+              {{ displayVersion(v) }}
+              <a-tag size="small" :color="channelMeta[v.channel].color">
+                {{ t(`plugins.channel.${v.channel}`) }}
+              </a-tag>
+              <a-tag v-if="v.is_default" size="small" color="green">
+                {{ t('plugins.defaultTag') }}
+              </a-tag>
+            </div>
+            <div class="version-sub">{{ formatLabel(v) }}</div>
+          </div>
+          <span class="version-arrow">›</span>
+        </div>
+        <!-- Sentinel for infinite scroll: loads the next alpha page when scrolled into view -->
+        <div
+          v-if="hasMore.alpha"
+          :ref="(el: unknown) => onSentinel(el, 'alpha')"
+          data-channel="alpha"
+          class="load-more-sentinel"
+        >
+          <a-spin v-if="loadingMore.alpha" :size="14" />
+          <span v-else class="load-more-hint">{{ t('plugins.scrollMore') }}</span>
+        </div>
+      </template>
+      <div v-else class="card-empty">
+        <template v-if="loadingChannel">{{ t('common.loading') }}</template>
+        <template v-else>{{ t('plugins.noVersions') }}</template>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -251,20 +256,6 @@ const hasAny = computed(() =>
 .lazy-tag {
   margin-left: 8px;
   vertical-align: 2px;
-}
-
-.channel-letter {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  margin-right: 6px;
-  vertical-align: -3px;
 }
 
 .version-row {

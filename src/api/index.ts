@@ -760,12 +760,12 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         const per = 2
         const start = (page - 1) * per
         const items = [
-          { version: 'abc1234def5678', label: '2026-04-10 · fix: something' },
-          { version: 'bbb2222ccc3333', label: '2026-04-09 · feat: another' },
-          { version: 'ccc3333ddd4444', label: '2026-04-08 · chore: deps' },
-          { version: 'ddd4444eee5555', label: '2026-04-07 · fix: typo' },
-          { version: 'eee5555fff6666', label: '2026-04-06 · feat: api' },
-          { version: 'fff6666aaa1111', label: '2026-04-05 · docs: readme' },
+          { version: 'abc1234def5678', label: '2026-04-10 · fix: something', published_at: '2026-04-10' },
+          { version: 'bbb2222ccc3333', label: '2026-04-09 · feat: another', published_at: '2026-04-09' },
+          { version: 'ccc3333ddd4444', label: '2026-04-08 · chore: deps', published_at: '2026-04-08' },
+          { version: 'ddd4444eee5555', label: '2026-04-07 · fix: typo', published_at: '2026-04-07' },
+          { version: 'eee5555fff6666', label: '2026-04-06 · feat: api', published_at: '2026-04-06' },
+          { version: 'fff6666aaa1111', label: '2026-04-05 · docs: readme', published_at: '2026-04-05' },
         ]
         const slice = items.slice(start, start + per)
         return {
@@ -773,6 +773,7 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
             version: c.version,
             channel: 'alpha',
             label: c.label,
+            published_at: c.published_at,
             is_default: page === 1 && i === 0,
           })),
           has_more: page < totalPages,
@@ -782,16 +783,16 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       if (channel === 'beta') {
         return {
           versions: [
-            { version: '0.4.0-next.1', channel: 'beta', label: '2026-04-08', is_default: true },
-            { version: '0.4.0-next.0', channel: 'beta', label: '2026-04-01', is_default: false },
+            { version: '0.4.0-next.1', channel: 'beta', label: '2026-04-08', published_at: '2026-04-08', is_default: true },
+            { version: '0.4.0-next.0', channel: 'beta', label: '2026-04-01', published_at: '2026-04-01', is_default: false },
           ],
           has_more: false,
         } as T
       }
       return {
         versions: [
-          { version: '1.3.0', channel: 'stable', label: '2026-04-05', is_default: true },
-          { version: '1.2.0', channel: 'stable', label: '2026-03-20', is_default: false },
+          { version: '1.3.0', channel: 'stable', label: '2026-04-05', published_at: '2026-04-05', is_default: true },
+          { version: '1.2.0', channel: 'stable', label: '2026-03-20', published_at: '2026-03-20', is_default: false },
         ],
         has_more: false,
       } as T

@@ -293,6 +293,8 @@ export interface PluginVersionInfo {
   version: string
   channel: PluginChannel
   label?: string
+  /** ISO publish/commit time; absent when the source has no timestamp. */
+  published_at?: string
   is_default: boolean
 }
 

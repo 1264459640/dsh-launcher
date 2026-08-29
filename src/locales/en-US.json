@@ -115,7 +115,7 @@
       "alpha": "Dev"
     },
     "defaultTag": "Default",
-    "noVersions": "No versions in this channel",
+    "noVersions": "No versions",
     "lazyLoad": "Scroll to load more",
     "scrollMore": "Keep scrolling to load…",
     "installTitle": "Install plugin",

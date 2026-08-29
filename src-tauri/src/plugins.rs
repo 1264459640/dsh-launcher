@@ -284,6 +284,9 @@ pub struct PluginVersionInfo {
     pub channel: PluginChannel,
     /// Short human label (e.g. the commit date or release tag).
     pub label: Option<String>,
+    /// ISO publish/commit time; used by the UI to sort the mixed list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
     /// Whether this is the channel's default (latest) entry.
     pub is_default: bool,
 }
@@ -562,6 +565,7 @@ async fn github_release_versions(
                 version: tag,
                 channel: channel.clone(),
                 label,
+                published_at: date.map(|d| d.to_string()),
                 is_default: false,
             });
         }
@@ -614,6 +618,15 @@ async fn npm_versions(
     }
     versions.sort_by(|a, b| b.1.cmp(&a.1)); // newest first by ISO time
 
+    // Publish time of the dist-tag default, for the synthetic fallback entry.
+    let default_ts = default_version.as_deref().and_then(|def| {
+        versions
+            .iter()
+            .find(|(v, _)| v == def)
+            .map(|(_, ts)| ts.clone())
+            .filter(|ts| !ts.is_empty())
+    });
+
     // Filter per channel: stable = no pre-release tag, beta = pre-release tag.
     let is_prerelease = |v: &str| v.contains('-');
     let mut out: Vec<PluginVersionInfo> = Vec::new();
@@ -630,7 +643,8 @@ async fn npm_versions(
         out.push(PluginVersionInfo {
             version: ver,
             channel: channel.clone(),
-            label: if ts.is_empty() { None } else { Some(ts) },
+            label: if ts.is_empty() { None } else { Some(ts.clone()) },
+            published_at: if ts.is_empty() { None } else { Some(ts) },
             is_default,
         });
     }
@@ -645,6 +659,7 @@ async fn npm_versions(
                     version: def,
                     channel: channel.clone(),
                     label: Some("dist-tag".to_string()),
+                    published_at: default_ts.clone(),
                     is_default: true,
                 },
             );
@@ -697,16 +712,17 @@ async fn alpha_commit(plugin_id: &str, page: u32) -> Result<PluginVersionPage, S
                 .pointer("/commit/committer/date")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let label = match (message, date) {
+            let label = match (&message, &date) {
                 (Some(m), Some(d)) => Some(format!("{d} · {m}")),
-                (Some(m), None) => Some(m),
-                (None, Some(d)) => Some(d),
+                (Some(m), None) => Some(m.clone()),
+                (None, Some(d)) => Some(d.clone()),
                 _ => None,
             };
             out.push(PluginVersionInfo {
                 version: sha,
                 channel: PluginChannel::Alpha,
                 label,
+                published_at: date,
                 is_default: page == 1 && i == 0,
             });
         }

@@ -115,7 +115,7 @@
       "alpha": "开发版"
     },
     "defaultTag": "默认",
-    "noVersions": "该渠道暂无版本",
+    "noVersions": "暂无版本",
     "lazyLoad": "滚动加载更多",
     "scrollMore": "继续滚动加载…",
     "installTitle": "安装插件",
