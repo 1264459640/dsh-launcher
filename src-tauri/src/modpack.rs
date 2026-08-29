@@ -698,14 +698,27 @@ async fn do_import_modpack(
         Some(v) => v,
         None => match &version_str {
             Some(v) => {
+                // A pinned base version (e.g. 0.1.0) may have no published
+                // build at all — only prereleases (0.1.0-rc.8). Substitute
+                // the latest available version of that line.
+                let target = resolve_version_fallback(v).await;
+                if target != *v {
+                    crate::tasks::push_task_log_pub(
+                        app,
+                        state,
+                        task_id,
+                        &format!("{v} 没有正式发行版本，改用该版本线最新的开发版本 {target}"),
+                    )
+                    .await;
+                }
                 crate::tasks::push_task_log_pub(
                     app,
                     state,
                     task_id,
-                    &format!("整合包需要 DSH {v}，本机未安装，开始安装…"),
+                    &format!("整合包需要 DSH {target}，本机未安装，开始安装…"),
                 )
                 .await;
-                crate::tasks::install_version_streamed_pub(app, state, task_id, v).await?
+                crate::tasks::install_version_streamed_pub(app, state, task_id, &target).await?
             }
             None => {
                 return Err("整合包未声明 dshVersion 且本机没有已安装的 DSH 版本".to_string());
@@ -896,6 +909,33 @@ fn dedupe_instance_name(cfg: &crate::config::Config, base: &str) -> String {
             return candidate;
         }
         n += 1;
+    }
+}
+
+/// When a pinned base version (say `0.1.0`) was never released as-is, falls
+/// back to the newest available version of the same line (e.g. `0.1.0-rc.8`)
+/// from npm + GitHub tags. Already-prerelease or exactly-available versions
+/// pass through unchanged; network failure also passes through (the install
+/// path reports the real error).
+async fn resolve_version_fallback(requested: &str) -> String {
+    if requested.contains('-') {
+        return requested.to_string();
+    }
+    let Ok(available) = crate::commands::fetch_available_versions().await else {
+        return requested.to_string();
+    };
+    let req_base = requested.split('-').next().unwrap_or(requested);
+    let best = available
+        .iter()
+        .filter_map(|v| {
+            let parsed = semver::Version::parse(&v.version).ok()?;
+            let base = v.version.split('-').next().unwrap_or(&v.version);
+            (base == req_base).then_some(parsed)
+        })
+        .max();
+    match best {
+        Some(v) => v.to_string(),
+        None => requested.to_string(),
     }
 }
 
