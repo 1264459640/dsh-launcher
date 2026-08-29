@@ -290,7 +290,12 @@
     "load": "读取整合包信息",
     "instanceName": "实例名称",
     "profileName": "Profile 名称",
-    "force": "覆盖同名 Profile"
+    "force": "覆盖同名 Profile",
+    "target": "导入目标",
+    "targetNew": "新建实例",
+    "targetExisting": "导入到现有实例",
+    "existingInstance": "选择实例",
+    "existingInstanceHint": "仅列出与整合包同一 DSH 版本线的实例"
   },
   "modpackLaunch": {
     "instanceNotFound": "找不到实例「{name}」"

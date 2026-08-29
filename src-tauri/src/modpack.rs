@@ -88,6 +88,11 @@ pub struct ImportModpackInput {
     /// `pack` (keeping `web` clean).
     #[serde(default)]
     pub profile_name: Option<String>,
+    /// Import into an existing instance (issue #11): the pack profile is
+    /// created in that instance's HOME instead of a new dedicated one. The
+    /// instance's DSH version must share the manifest's version line.
+    #[serde(default)]
+    pub existing_instance_id: Option<String>,
 }
 
 /// Maximum accepted modpack size (64 MiB).
@@ -680,14 +685,15 @@ async fn do_import_modpack(
         state,
         task_id,
         &format!(
-            "整合包 {} v{} → 实例「{}」/ profile「{}」",
-            manifest.name, manifest.version, instance_name, profile_name
+            "整合包 {} v{} → profile「{}」",
+            manifest.name, manifest.version, profile_name
         ),
     )
     .await;
 
-    // 3. Resolve the DSH version: the manifest's pinned dshVersion (exact),
-    //    falling back to the newest installed version. Install if missing.
+    // 3. Resolve the target: an existing instance (issue #11) or a fresh
+    //    dedicated one. The manifest's pinned dshVersion line constrains
+    //    both paths.
     let version_str = manifest
         .dsh_version
         .as_deref()
@@ -697,58 +703,125 @@ async fn do_import_modpack(
                 .to_string()
         })
         .filter(|v| !v.is_empty());
-    let version_record = {
-        let cfg = state.config.lock().unwrap();
-        match &version_str {
-            Some(v) => cfg.versions.iter().find(|r| r.version == *v).cloned(),
-            None => cfg.versions.last().cloned(),
+
+    let existing_target = match &input.existing_instance_id {
+        Some(id) => {
+            let cfg = state.config.lock().unwrap();
+            let inst = cfg
+                .instances
+                .iter()
+                .find(|i| i.id == *id)
+                .cloned()
+                .ok_or_else(|| "目标实例不存在".to_string())?;
+            let home = cfg
+                .homes
+                .iter()
+                .find(|h| h.id == inst.home_id)
+                .cloned()
+                .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+            let ver = cfg
+                .versions
+                .iter()
+                .find(|v| v.id == inst.version_id)
+                .cloned()
+                .ok_or_else(|| "DSH 版本不存在".to_string())?;
+            if let Some(want) = &version_str {
+                let base = |v: &str| v.split('-').next().unwrap_or(v).to_string();
+                if base(&ver.version) != base(want) {
+                    return Err(format!(
+                        "实例「{}」的 DSH 版本 {} 与整合包要求的 {} 不在同一版本线",
+                        inst.name, ver.version, want
+                    ));
+                }
+            }
+            Some((inst, home, ver))
+        }
+        None => None,
+    };
+
+    let (version_record, home, target_instance_id) = match existing_target {
+        Some((inst, home, ver)) => {
+            crate::tasks::push_task_log_pub(
+                app,
+                state,
+                task_id,
+                &format!("导入到现有实例「{}」（DSH {}）", inst.name, ver.version),
+            )
+            .await;
+            (ver, home.path, Some(inst.id))
+        }
+        None => {
+            // Fresh instance: resolve the pinned version (exact), falling
+            // back to the newest installed version; install if missing.
+            let version_record = {
+                let cfg = state.config.lock().unwrap();
+                match &version_str {
+                    Some(v) => cfg.versions.iter().find(|r| r.version == *v).cloned(),
+                    None => cfg.versions.last().cloned(),
+                }
+            };
+            let version_record = match version_record {
+                Some(v) => v,
+                None => match &version_str {
+                    Some(v) => {
+                        // A pinned base version (e.g. 0.1.0) may have no
+                        // published build at all — only prereleases
+                        // (0.1.0-rc.8). Substitute the latest available
+                        // version of that line.
+                        let target = resolve_version_fallback(v).await;
+                        if target != *v {
+                            crate::tasks::push_task_log_pub(
+                                app,
+                                state,
+                                task_id,
+                                &format!(
+                                    "{v} 没有正式发行版本，改用该版本线最新的开发版本 {target}"
+                                ),
+                            )
+                            .await;
+                        }
+                        crate::tasks::push_task_log_pub(
+                            app,
+                            state,
+                            task_id,
+                            &format!("整合包需要 DSH {target}，本机未安装，开始安装…"),
+                        )
+                        .await;
+                        crate::tasks::install_version_streamed_pub(app, state, task_id, &target)
+                            .await?
+                    }
+                    None => {
+                        return Err(
+                            "整合包未声明 dshVersion 且本机没有已安装的 DSH 版本".to_string()
+                        );
+                    }
+                },
+            };
+
+            // Dedicated HOME for the new instance (path-based reuse keeps a
+            // retry idempotent), then prepare the pristine web template.
+            let home_path = state
+                .data_dir
+                .join("homes")
+                .join(crate::config::sanitize_name(&instance_name));
+            let home = crate::commands::create_home_record(
+                state,
+                &instance_name,
+                &home_path.to_string_lossy(),
+            )?;
+            crate::tasks::ensure_web_profile_template_pub(
+                app,
+                state,
+                task_id,
+                &home.path,
+                &version_record,
+            )
+            .await?;
+            (version_record, home.path, None)
         }
     };
-    let version_record = match version_record {
-        Some(v) => v,
-        None => match &version_str {
-            Some(v) => {
-                // A pinned base version (e.g. 0.1.0) may have no published
-                // build at all — only prereleases (0.1.0-rc.8). Substitute
-                // the latest available version of that line.
-                let target = resolve_version_fallback(v).await;
-                if target != *v {
-                    crate::tasks::push_task_log_pub(
-                        app,
-                        state,
-                        task_id,
-                        &format!("{v} 没有正式发行版本，改用该版本线最新的开发版本 {target}"),
-                    )
-                    .await;
-                }
-                crate::tasks::push_task_log_pub(
-                    app,
-                    state,
-                    task_id,
-                    &format!("整合包需要 DSH {target}，本机未安装，开始安装…"),
-                )
-                .await;
-                crate::tasks::install_version_streamed_pub(app, state, task_id, &target).await?
-            }
-            None => {
-                return Err("整合包未声明 dshVersion 且本机没有已安装的 DSH 版本".to_string());
-            }
-        },
-    };
 
-    // 4. Dedicated HOME for the new instance (path-based reuse keeps a retry
-    //    idempotent), then prepare the pristine web profile template.
-    let home_path = state
-        .data_dir
-        .join("homes")
-        .join(crate::config::sanitize_name(&instance_name));
-    let home =
-        crate::commands::create_home_record(state, &instance_name, &home_path.to_string_lossy())?;
-    crate::tasks::ensure_web_profile_template_pub(app, state, task_id, &home.path, &version_record)
-        .await?;
-
-    // 5. Materialize the pack profile directory inside the fresh HOME.
-    let home = home.path;
+    // 4. Materialize the pack profile directory inside the HOME.
     let dest = crate::plugins::profile_dir_pub(&home, &profile_name);
     if dest.exists() {
         if !input.force {
@@ -850,8 +923,19 @@ async fn do_import_modpack(
         return Err(last_err);
     }
 
-    // 7. Register the instance with the pack profile as its default.
-    let instance_id = {
+    // 7. Register / update the instance with the pack profile as its default.
+    let (instance_id, final_instance_name) = if let Some(id) = target_instance_id {
+        let mut cfg = state.config.lock().unwrap();
+        let inst = cfg
+            .instances
+            .iter_mut()
+            .find(|i| i.id == id)
+            .ok_or_else(|| "目标实例不存在".to_string())?;
+        inst.default_profile = Some(profile_name.clone());
+        let name = inst.name.clone();
+        crate::commands::save_state(state, &cfg)?;
+        (id, name)
+    } else {
         let mut cfg = state.config.lock().unwrap();
         let inst = crate::config::DshInstance {
             id: new_id("i"),
@@ -865,11 +949,12 @@ async fn do_import_modpack(
         };
         cfg.instances.push(inst.clone());
         crate::commands::save_state(state, &cfg)?;
-        inst.id
+        (inst.id, instance_name.clone())
     };
 
     // 8. Modpack icon (issue #8): a bundled icon.png becomes the instance's
-    //    local icon; an http(s) manifest icon stays a remote reference.
+    //    local icon; an http(s) manifest icon stays a remote reference. An
+    //    existing instance keeps an icon it already has.
     let imported_icon: Option<String> = if unpacked.join("icon.png").exists() {
         let dest = crate::icons::local_icon_path(&home, &instance_id);
         if let Some(parent) = dest.parent() {
@@ -887,19 +972,21 @@ async fn do_import_modpack(
     if let Some(icon) = imported_icon {
         let mut cfg = state.config.lock().unwrap();
         if let Some(inst) = cfg.instances.iter_mut().find(|i| i.id == instance_id) {
-            inst.icon = Some(icon);
-            crate::commands::save_state(state, &cfg)?;
+            if inst.icon.is_none() {
+                inst.icon = Some(icon);
+                crate::commands::save_state(state, &cfg)?;
+            }
         }
     }
 
     crate::log_info!(
         "整合包 {} 已导入为实例「{}」（profile「{}」）",
         manifest.name,
-        instance_name,
+        final_instance_name,
         profile_name
     );
     drop(guard);
-    Ok(format!("{instance_name}（{instance_id}）"))
+    Ok(format!("{final_instance_name}（{instance_id}）"))
 }
 
 /// Finds a free instance name, appending `-2`, `-3`, … when taken.

@@ -159,6 +159,8 @@ export interface ImportModpackInput {
   force?: boolean
   instance_name?: string
   profile_name?: string
+  /** Import into this existing instance instead of creating a new one. */
+  existing_instance_id?: string
 }
 
 export interface NewInstanceInput {

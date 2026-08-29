@@ -25,16 +25,34 @@ const instanceName = ref('')
 const profileName = ref('')
 const force = ref(false)
 const busy = ref(false)
+// Issue #11: import into an existing instance on the same version line.
+const importMode = ref<'new' | 'existing'>('new')
+const existingInstanceId = ref<string | undefined>(undefined)
 
-const canConfirm = computed(
-  () => !!manifest.value && instanceName.value.trim().length > 0 && !busy.value,
-)
+/** Instances whose DSH version shares the manifest's version line. */
+const eligibleInstances = computed(() => {
+  const want = manifest.value?.dshVersion?.trim().replace(/^[>=^~\s]+/, '')
+  return store.instances.filter((inst) => {
+    if (!want) return true
+    const have = store.versionById(inst.version_id)?.version
+    if (!have) return false
+    return have.split('-')[0] === want.split('-')[0]
+  })
+})
+
+const canConfirm = computed(() => {
+  if (!manifest.value || busy.value) return false
+  if (importMode.value === 'existing') return !!existingInstanceId.value
+  return instanceName.value.trim().length > 0
+})
 
 watch(
   () => props.visible,
   async (v) => {
     if (!v) return
     manifest.value = null
+    importMode.value = 'new'
+    existingInstanceId.value = undefined
     source.value = props.initialSource ?? ''
     force.value = false
     if (source.value) await loadManifest()
@@ -59,6 +77,8 @@ async function loadManifest() {
     manifest.value = m
     instanceName.value = localizedDisplayName(m) ?? m.name
     profileName.value = m.profileName?.trim() || 'pack'
+    existingInstanceId.value = undefined
+    importMode.value = 'new'
   } catch (e) {
     Message.error(String(e))
   } finally {
@@ -85,8 +105,11 @@ async function confirm() {
     await api.startImportModpackTask({
       source: source.value.trim(),
       force: force.value,
-      instance_name: instanceName.value.trim(),
+      instance_name:
+        importMode.value === 'new' ? instanceName.value.trim() : undefined,
       profile_name: profileName.value.trim() || undefined,
+      existing_instance_id:
+        importMode.value === 'existing' ? existingInstanceId.value : undefined,
     })
     emit('update:visible', false)
     await store.refreshTasks()
@@ -138,7 +161,22 @@ function close() {
           <template v-if="manifest.author"> · {{ manifest.author }}</template>
           <template v-if="manifest.dshVersion"> · DSH {{ manifest.dshVersion }}</template>
         </a-alert>
-        <a-form-item :label="t('modpack.instanceName')" required>
+        <a-form-item :label="t('modpack.target')">
+          <a-radio-group v-model="importMode" type="button">
+            <a-radio value="new">{{ t('modpack.targetNew') }}</a-radio>
+            <a-radio value="existing" :disabled="eligibleInstances.length === 0">
+              {{ t('modpack.targetExisting') }}
+            </a-radio>
+          </a-radio-group>
+        </a-form-item>
+        <a-form-item v-if="importMode === 'existing'" :label="t('modpack.existingInstance')" required>
+          <a-select v-model="existingInstanceId" :placeholder="t('modpack.existingInstanceHint')">
+            <a-option v-for="inst in eligibleInstances" :key="inst.id" :value="inst.id">
+              {{ inst.name }}（{{ store.versionById(inst.version_id)?.version }}）
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item v-else :label="t('modpack.instanceName')" required>
           <a-input v-model="instanceName" />
         </a-form-item>
         <a-form-item :label="t('modpack.profileName')">

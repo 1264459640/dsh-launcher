@@ -290,7 +290,12 @@
     "load": "Read modpack info",
     "instanceName": "Instance name",
     "profileName": "Profile name",
-    "force": "Overwrite the profile if it exists"
+    "force": "Overwrite the profile if it exists",
+    "target": "Import target",
+    "targetNew": "New instance",
+    "targetExisting": "Existing instance",
+    "existingInstance": "Select instance",
+    "existingInstanceHint": "Only instances on the same DSH version line are listed"
   },
   "modpackLaunch": {
     "instanceNotFound": "Instance \"{name}\" not found"
