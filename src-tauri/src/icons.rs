@@ -73,6 +73,25 @@ pub(crate) async fn fetch_square_icon_png(url: &str) -> Result<Vec<u8>, String> 
     crop_square_png(&bytes)
 }
 
+/// Encodes PNG bytes as a Windows .ico (issue #14): .url shortcuts only
+/// accept ICO icons. The image is fitted into 256×256 (the ICO ceiling).
+pub(crate) fn png_to_ico_bytes(png: &[u8]) -> Result<Vec<u8>, String> {
+    use image::ImageEncoder;
+    let img = image::load_from_memory(png).map_err(|e| format!("解析图像失败: {e}"))?;
+    let img = if img.width() > ICON_SIZE || img.height() > ICON_SIZE {
+        img.resize(ICON_SIZE, ICON_SIZE, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let mut out = Vec::new();
+    image::codecs::ico::IcoEncoder::new(&mut out)
+        .write_image(&rgba, w, h, image::ExtendedColorType::Rgba8)
+        .map_err(|e| format!("编码 ICO 失败: {e}"))?;
+    Ok(out)
+}
+
 fn instance_home(state: &AppState, instance_id: &str) -> Result<PathBuf, String> {
     let cfg = state.config.lock().unwrap();
     let inst = cfg
@@ -201,5 +220,15 @@ mod tests {
         let img = image::load_from_memory(&png).unwrap();
         assert_eq!(img.width(), img.height());
         assert_eq!(img.width(), 2);
+    }
+
+    #[test]
+    fn png_converts_to_valid_ico() {
+        let ico = png_to_ico_bytes(&rect_png()).unwrap();
+        // ICO header: reserved=0, type=1 (icon), count=1.
+        assert_eq!(&ico[..6], &[0, 0, 1, 0, 1, 0]);
+        let img = image::load_from_memory_with_format(&ico, image::ImageFormat::Ico).unwrap();
+        assert_eq!(img.width(), 4);
+        assert_eq!(img.height(), 2);
     }
 }

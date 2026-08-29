@@ -887,44 +887,64 @@ fn uri_encode(value: &str) -> String {
     out
 }
 
+/// Default shortcut icon when the instance has none (bundled launcher icon).
+const DEFAULT_ICON_PNG: &[u8] = include_bytes!("../icons/128x128.png");
+
 /// Writes a Windows Internet Shortcut (.url) that launches an instance via
 /// `dsh-launcher://launch?instance=<name>&profile=<profile>`. The shortcut
-/// icon is the instance icon when a local file exists, otherwise the
-/// launcher executable.
+/// icon is the instance icon converted to .ico (Windows shortcuts only accept
+/// ICO); with no icon the launcher icon is used instead (issue #14).
 #[tauri::command]
-pub fn create_launch_shortcut(
+pub async fn create_launch_shortcut(
     state: State<'_, AppState>,
     instance_id: String,
     profile: String,
     dest_path: String,
 ) -> Result<(), String> {
-    let cfg = state.config.lock().unwrap();
-    let inst = cfg
-        .instances
-        .iter()
-        .find(|i| i.id == instance_id)
-        .ok_or_else(|| "实例不存在".to_string())?;
-    let home = cfg
-        .homes
-        .iter()
-        .find(|h| h.id == inst.home_id)
-        .map(|h| h.path.clone())
-        .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+    let (name, icon, home) = {
+        let cfg = state.config.lock().unwrap();
+        let inst = cfg
+            .instances
+            .iter()
+            .find(|i| i.id == instance_id)
+            .ok_or_else(|| "实例不存在".to_string())?;
+        let home = cfg
+            .homes
+            .iter()
+            .find(|h| h.id == inst.home_id)
+            .map(|h| h.path.clone())
+            .ok_or_else(|| "DSH_HOME 不存在".to_string())?;
+        (inst.name.clone(), inst.icon.clone(), home)
+    };
 
     let url = format!(
         "dsh-launcher://launch?instance={}&profile={}",
-        uri_encode(&inst.name),
+        uri_encode(&name),
         uri_encode(profile.trim()),
     );
-    let icon_file = if inst.icon.as_deref() == Some("local") {
-        let p = crate::icons::local_icon_path(&home, &inst.id);
-        if p.exists() {
-            p
-        } else {
-            std::env::current_exe().map_err(|e| format!("获取启动器路径失败: {e}"))?
+
+    // Resolve the icon as PNG bytes: local file → remote URL → launcher
+    // default. Then convert to ICO — Windows .url shortcuts ignore PNG icons.
+    let icon_png: Vec<u8> = match icon.as_deref() {
+        Some("local") => std::fs::read(crate::icons::local_icon_path(&home, &instance_id))
+            .unwrap_or_else(|_| DEFAULT_ICON_PNG.to_vec()),
+        Some(remote) if remote.starts_with("https://") || remote.starts_with("http://") => {
+            crate::icons::fetch_square_icon_png(remote)
+                .await
+                .unwrap_or_else(|_| DEFAULT_ICON_PNG.to_vec())
         }
-    } else {
-        std::env::current_exe().map_err(|e| format!("获取启动器路径失败: {e}"))?
+        _ => DEFAULT_ICON_PNG.to_vec(),
+    };
+    let icon_file = match crate::icons::png_to_ico_bytes(&icon_png) {
+        Ok(ico) => {
+            let dir = state.data_dir.join("icons");
+            std::fs::create_dir_all(&dir).ok();
+            let ico_path = dir.join(format!("shortcut-{instance_id}.ico"));
+            std::fs::write(&ico_path, ico)
+                .map(|_| ico_path)
+                .map_err(|e| format!("写入 ICO 图标失败: {e}"))?
+        }
+        Err(_) => std::env::current_exe().map_err(|e| format!("获取启动器路径失败: {e}"))?,
     };
     let content = format!(
         "[InternetShortcut]\r\nURL={url}\r\nIconFile={}\r\nIconIndex=0\r\n",
