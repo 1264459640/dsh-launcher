@@ -409,15 +409,18 @@ pub async fn export_modpack(
 
     let patch = std::fs::read_to_string(profile_dir.join("cordis.patch.yml")).ok();
 
-    // Instance icon (issue #8): bundle a cropped PNG as icon.png. A remote
-    // icon that cannot be fetched right now degrades to a URL reference.
-    let instance_icon = {
+    // Instance metadata (issue #8 icon; issue #12: displayName defaults to
+    // the instance name, description to an empty string).
+    let instance_info = {
         let cfg = state.config.lock().unwrap();
         cfg.instances
             .iter()
             .find(|i| i.home_id == input.home_id)
-            .map(|i| (i.id.clone(), i.icon.clone()))
+            .map(|i| (i.id.clone(), i.name.clone(), i.icon.clone()))
     };
+    let instance_icon = instance_info
+        .as_ref()
+        .map(|(id, _, icon)| (id.clone(), icon.clone()));
     let mut icon_field: Option<String> = None;
     let mut icon_png: Option<Vec<u8>> = None;
     if let Some((inst_id, Some(icon))) = instance_icon {
@@ -440,9 +443,16 @@ pub async fn export_modpack(
     let manifest = ModpackManifest {
         manifest_version: MANIFEST_VERSION,
         name: name.clone(),
-        display_name: input.display_name,
+        display_name: input
+            .display_name
+            .filter(|d| d.as_str().map(|s| !s.trim().is_empty()).unwrap_or(true))
+            .or_else(|| {
+                instance_info
+                    .as_ref()
+                    .map(|(_, name, _)| serde_json::Value::String(name.clone()))
+            }),
         version: version.clone(),
-        description: input.description,
+        description: Some(input.description.unwrap_or_else(|| serde_json::Value::String(String::new()))),
         author: input
             .author
             .filter(|a| !a.trim().is_empty())

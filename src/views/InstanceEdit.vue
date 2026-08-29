@@ -344,7 +344,7 @@ function startExportModpack(profile: string) {
   exportForm.value = {
     name: profile,
     version: '1.0.0',
-    displayName: '',
+    displayName: name.value.trim(),
     description: '',
     author: '',
     outDir: '',
