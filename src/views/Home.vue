@@ -686,7 +686,7 @@ function goEditSelected() {
     cursor: pointer;
     user-select: none;
 
-    &,
+    // Children only: the span itself must keep its opaque bar background.
     * {
       color: var(--color-text-1) !important;
       background-color: transparent !important;
