@@ -292,6 +292,10 @@ pub fn update_instance(
     let Some(pos) = cfg.instances.iter().position(|i| i.id == updated.id) else {
         return Err("实例不存在".to_string());
     };
+    // The icon is managed by set/clear_instance_icon, not by this form
+    // payload; preserve whatever is currently stored (the frontend spreads a
+    // possibly stale instance object).
+    updated.icon = cfg.instances[pos].icon.clone();
     cfg.instances[pos] = updated.clone();
     save_state(&state, &cfg)?;
     Ok(updated)

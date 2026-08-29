@@ -99,12 +99,35 @@ async function launchFromDeepLink(u: URL) {
     Message.error(t('modpackLaunch.instanceNotFound', { name: ref }))
     return
   }
-  const profile = u.searchParams.get('profile') || inst.default_profile || 'web'
   try {
-    await api.startInstance(inst.id, profile)
-    await api.openInstanceWindow(inst.id)
+    const state = store.statusOf(inst.id).state
+    if (state !== 'running' && state !== 'starting') {
+      const profile = u.searchParams.get('profile') || inst.default_profile || 'web'
+      await api.startInstance(inst.id, profile)
+    }
+    // start_instance returns right after spawn; the web URL (and the window
+    // command's readiness check) only exist once the instance is running.
+    await openWindowWhenReady(inst.id)
   } catch (e) {
     Message.error(String(e))
+  }
+}
+
+/** Waits for the instance to report `running` with a URL, then opens its window. */
+async function openWindowWhenReady(id: string) {
+  const deadline = Date.now() + 120_000
+  for (;;) {
+    const st = store.statusOf(id)
+    if (st.state === 'running' && st.url) {
+      await api.openInstanceWindow(id)
+      return
+    }
+    if (st.state === 'exited' || Date.now() > deadline) {
+      // Last attempt: surface the backend's own error if it is not ready.
+      await api.openInstanceWindow(id)
+      return
+    }
+    await new Promise((r) => setTimeout(r, 500))
   }
 }
 

@@ -145,7 +145,7 @@ async function onOpenWindow(id: string) {
         <template #name="{ record }">
           <span class="inst-name">
             <img v-if="iconMap[record.id]" :src="iconMap[record.id]!" class="inst-icon" alt="" />
-            <span v-else class="inst-icon inst-icon-default">DSH</span>
+            <img v-else src="@/assets/launcher-icon.png" class="inst-icon" alt="" />
             {{ record.name }}
           </span>
         </template>
@@ -250,16 +250,6 @@ async function onOpenWindow(id: string) {
   border-radius: 6px;
   object-fit: cover;
   flex-shrink: 0;
-}
-
-.inst-icon-default {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 8px;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, #4d6bfe, #165dff);
 }
 
 .status-url {

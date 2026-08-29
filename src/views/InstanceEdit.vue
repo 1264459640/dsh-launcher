@@ -91,6 +91,7 @@ async function applyIconInput() {
     await api.setInstanceIcon(editingId.value, iconInput.value.trim())
     iconInput.value = ''
     await loadIcon()
+    await store.refreshInstances()
     Message.success(t('instanceEdit.iconUpdated'))
   } catch (e) {
     Message.error(String(e))
@@ -111,6 +112,7 @@ async function pickIconFile() {
   try {
     await api.setInstanceIcon(editingId.value, file)
     await loadIcon()
+    await store.refreshInstances()
     Message.success(t('instanceEdit.iconUpdated'))
   } catch (e) {
     Message.error(String(e))
@@ -124,6 +126,7 @@ async function clearIcon() {
   try {
     await api.clearInstanceIcon(editingId.value)
     await loadIcon()
+    await store.refreshInstances()
   } catch (e) {
     Message.error(String(e))
   }
@@ -562,7 +565,7 @@ const terminalRunning = ref(false)
               <a-form-item v-if="editingId" :label="t('instanceEdit.icon')">
                 <div class="icon-editor">
                   <img v-if="iconUrl" :src="iconUrl" class="icon-preview" alt="" />
-                  <div v-else class="icon-preview icon-default">DSH</div>
+                  <img v-else src="@/assets/launcher-icon.png" class="icon-preview" alt="" />
                   <div class="icon-actions">
                     <a-input
                       v-model="iconInput"
@@ -924,15 +927,6 @@ const terminalRunning = ref(false)
   object-fit: cover;
   flex-shrink: 0;
   border: 1px solid var(--color-border-2);
-}
-
-.icon-default {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, #4d6bfe, #165dff);
 }
 
 .icon-actions {

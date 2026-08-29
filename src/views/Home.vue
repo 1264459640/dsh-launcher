@@ -10,7 +10,28 @@ import markedKatex from 'marked-katex-extension'
 import DOMPurify from 'dompurify'
 import { api } from '@/api'
 import { useLauncherStore } from '@/stores/launcher'
+import launcherDefaultIcon from '@/assets/launcher-icon.png'
 import 'katex/dist/katex.min.css'
+
+// --- Instance icons (issue #8): the launch panel avatar follows the instance --
+
+const iconMap = ref<Record<string, string | null>>({})
+
+async function loadIcons() {
+  const next: Record<string, string | null> = {}
+  for (const inst of store.instances) {
+    if (!inst.icon) {
+      next[inst.id] = null
+      continue
+    }
+    try {
+      next[inst.id] = await api.readInstanceIcon(inst.id)
+    } catch {
+      next[inst.id] = null
+    }
+  }
+  iconMap.value = next
+}
 
 const marked = new Marked({ gfm: true, breaks: true })
   .use(markedAlert())
@@ -65,6 +86,16 @@ const selectedInstance = computed(() =>
 
 const selectedStatus = computed(() =>
   selectedInstanceId.value ? store.statusOf(selectedInstanceId.value) : undefined,
+)
+
+const selectedIcon = computed(() =>
+  selectedInstanceId.value ? (iconMap.value[selectedInstanceId.value] ?? null) : null,
+)
+
+watch(
+  () => store.instances.map((i) => `${i.id}:${i.icon ?? ''}`).join(','),
+  loadIcons,
+  { immediate: true },
 )
 
 const selectedVersion = computed(() =>
@@ -297,7 +328,7 @@ function goEditSelected() {
     <!-- Left launch panel -->
     <aside class="launch-panel">
       <div class="identity-block">
-        <div class="instance-avatar"><img src="@/assets/launcher-icon.png" alt="" /></div>
+        <div class="instance-avatar"><img :src="selectedIcon ?? launcherDefaultIcon" alt="" /></div>
         <div class="instance-name">{{ selectedInstance?.name ?? '—' }}</div>
         <a-tag
           v-if="selectedStatus"
