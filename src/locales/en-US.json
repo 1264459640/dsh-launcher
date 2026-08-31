@@ -197,10 +197,23 @@
       "title": "Launcher updates",
       "check": "Check for updates",
       "devChannel": "dev channel",
+      "channel": {
+        "dev": "dev channel",
+        "release": "release channel"
+      },
+      "channelHint": "The dev channel includes pre-releases; the release channel checks stable versions only (pre-releases are ignored).",
       "available": "New version v{version} available",
       "viewRelease": "Download",
       "upToDate": "You are on the latest version"
-    }
+    },
+    "dataDir": {
+      "title": "Data directory",
+      "hint": "The launcher's data directory (config, logs, versions and HOME directories)",
+      "open": "Open directory",
+      "viewLog": "View log",
+      "unknown": "Unknown"
+    },
+    "logOpened": "Log revealed in file manager: {path}"
   },
   "instanceEdit": {
     "titleNew": "New instance",
@@ -272,6 +285,12 @@
     "iconClear": "Reset",
     "iconUpdated": "Instance icon updated",
     "iconHint": "Local images are center-cropped to 1:1 and stored in the instance directory; the launcher icon is the default and is never exported",
+    "files": "Files",
+    "openDirectory": "Open directory",
+    "viewLog": "View log",
+    "filesHint": "Open this instance's DSH_HOME directory, or reveal its runtime log in the file manager",
+    "dirOpened": "Directory opened in file manager: {path}",
+    "logOpened": "Log revealed in file manager: {path}",
     "createShortcut": "Create shortcut",
     "shortcutCreated": "Shortcut created: {path}",
     "skillsDesc": "Manage skills in the DSH_HOME of this instance (<HOME>/skills, shared per HOME). Install/update from repositories (versioned by commit/tag), import a SKILL.md, or paste content to create one; DSH watches the directory so changes apply without a restart.",

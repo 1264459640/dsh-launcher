@@ -47,6 +47,13 @@ async function onLogLevelChange(value: string | number | boolean | Record<string
 const launcherVersion = ref('')
 const checkingUpdate = ref(false)
 const updateInfo = ref<LauncherUpdateInfo | null>(null)
+/** Update channel: "dev" (includes prereleases) or "release" (stable only). */
+const updateChannel = ref<'dev' | 'release'>('dev')
+
+const UPDATE_CHANNEL_OPTIONS = computed<{ value: 'dev' | 'release'; label: string }[]>(() => [
+  { value: 'dev', label: t('settings.update.channel.dev') },
+  { value: 'release', label: t('settings.update.channel.release') },
+])
 
 onMounted(async () => {
   try {
@@ -54,17 +61,52 @@ onMounted(async () => {
   } catch {
     launcherVersion.value = '?'
   }
+  try {
+    dataDir.value = await api.getLauncherDirectory()
+  } catch {
+    dataDir.value = ''
+  }
 })
 
 async function onCheckUpdate() {
   checkingUpdate.value = true
   try {
-    updateInfo.value = await api.checkLauncherUpdate()
+    updateInfo.value = await api.checkLauncherUpdate(updateChannel.value)
     if (updateInfo.value.up_to_date) Message.success(t('settings.update.upToDate'))
   } catch (e) {
     Message.error(String(e))
   } finally {
     checkingUpdate.value = false
+  }
+}
+
+async function onUpdateChannelChange(value: string | number | boolean | Record<string, unknown> | (string | number | boolean | Record<string, unknown>)[]) {
+  const channel = String(value) === 'release' ? 'release' : 'dev'
+  updateChannel.value = channel
+  // A different channel invalidates the previous result; only a fresh check
+  // is meaningful for the new channel.
+  updateInfo.value = null
+}
+
+// --- Data directory ---------------------------------------------------------
+
+const dataDir = ref('')
+
+async function onOpenDataDir() {
+  try {
+    const dir = await api.openLauncherDirectory()
+    dataDir.value = dir
+  } catch (e) {
+    Message.error(String(e))
+  }
+}
+
+async function onOpenLauncherLog() {
+  try {
+    const path = await api.openLauncherLog()
+    Message.success(t('settings.logOpened', { path }))
+  } catch (e) {
+    Message.error(String(e))
   }
 }
 
@@ -358,10 +400,21 @@ const homeColumns = computed(() => [
         <a-tag v-if="updateInfo?.channel === 'dev' || launcherVersion.includes('-dev.')" color="orange" size="small">
           {{ t('settings.update.devChannel') }}
         </a-tag>
+        <a-select
+          :model-value="updateChannel"
+          class="update-channel-select"
+          size="small"
+          @change="onUpdateChannelChange"
+        >
+          <a-option v-for="o in UPDATE_CHANNEL_OPTIONS" :key="o.value" :value="o.value">
+            {{ o.label }}
+          </a-option>
+        </a-select>
         <a-button size="small" :loading="checkingUpdate" @click="onCheckUpdate">
           {{ t('settings.update.check') }}
         </a-button>
       </div>
+      <p class="news-source-hint">{{ t('settings.update.channelHint') }}</p>
       <div v-if="updateInfo && !updateInfo.up_to_date" class="update-result">
         <a-alert type="info" :show-icon="true">
           {{ t('settings.update.available', { version: updateInfo.latest }) }}
@@ -374,6 +427,18 @@ const homeColumns = computed(() => [
       </div>
       <div v-else-if="updateInfo?.up_to_date" class="update-result">
         <span class="update-up-to-date">{{ t('settings.update.upToDate') }}</span>
+      </div>
+    </div>
+
+    <div class="dl-card">
+      <div class="dl-card-title">
+        <h3>{{ t('settings.dataDir.title') }}</h3>
+      </div>
+      <p class="news-source-hint">{{ t('settings.dataDir.hint') }}</p>
+      <div class="update-row">
+        <span class="data-dir-path" :title="dataDir">{{ dataDir || t('settings.dataDir.unknown') }}</span>
+        <a-button size="small" @click="onOpenDataDir">{{ t('settings.dataDir.open') }}</a-button>
+        <a-button size="small" @click="onOpenLauncherLog">{{ t('settings.dataDir.viewLog') }}</a-button>
       </div>
     </div>
 
@@ -446,6 +511,21 @@ const homeColumns = computed(() => [
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
+}
+
+.update-channel-select {
+  width: 140px;
+}
+
+.data-dir-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--color-text-3);
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .update-current {

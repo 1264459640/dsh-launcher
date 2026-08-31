@@ -168,6 +168,37 @@ watch(name, async (v) => {
   }
 })
 
+// --- Open directory / view log (issue: instance folder & log access) -------
+
+const dirBusy = ref(false)
+const logBusy = ref(false)
+
+async function onOpenDirectory() {
+  if (!editingId.value) return
+  dirBusy.value = true
+  try {
+    const path = await api.openInstanceDirectory(editingId.value)
+    Message.success(t('instanceEdit.dirOpened', { path }))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    dirBusy.value = false
+  }
+}
+
+async function onViewLog() {
+  if (!editingId.value) return
+  logBusy.value = true
+  try {
+    const path = await api.openInstanceLog(editingId.value)
+    Message.success(t('instanceEdit.logOpened', { path }))
+  } catch (e) {
+    Message.error(String(e))
+  } finally {
+    logBusy.value = false
+  }
+}
+
 // --- Save ----------------------------------------------------------------------
 
 const formValid = computed(
@@ -1073,6 +1104,18 @@ const terminalRunning = ref(false)
                 <a-alert v-if="homeId === DEDICATED" type="info" class="dedicated-hint">
                   {{ t('instanceEdit.dedicatedHomeHint', { path: dedicatedPath }) }}
                 </a-alert>
+              </a-form-item>
+
+              <a-form-item v-if="editingId" :label="t('instanceEdit.files')">
+                <a-space>
+                  <a-button size="small" :loading="dirBusy" @click="onOpenDirectory">
+                    {{ t('instanceEdit.openDirectory') }}
+                  </a-button>
+                  <a-button size="small" :loading="logBusy" @click="onViewLog">
+                    {{ t('instanceEdit.viewLog') }}
+                  </a-button>
+                </a-space>
+                <p class="icon-hint">{{ t('instanceEdit.filesHint') }}</p>
               </a-form-item>
             </a-form>
 

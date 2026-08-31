@@ -791,6 +791,13 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<LauncherSettings, Stri
     Ok(state.config.lock().unwrap().settings.clone())
 }
 
+/// The launcher's data directory (`<data_dir>`); the frontend shows it in
+/// the settings page next to the "open directory" button.
+#[tauri::command]
+pub fn get_launcher_directory(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state.data_dir.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 pub fn update_settings(
     app: AppHandle,
@@ -873,7 +880,7 @@ pub fn update_settings(
 }
 
 // ---------------------------------------------------------------------------
-// External links
+// External links / directories
 // ---------------------------------------------------------------------------
 
 /// Opens an http(s) URL in the system browser. The Tauri webview ignores
@@ -886,6 +893,131 @@ pub fn open_external(url: String) -> Result<(), String> {
     }
     crate::log_info!("在系统浏览器打开 {url}");
     open::that(&url).map_err(|e| format!("打开链接失败: {e}"))
+}
+
+/// Opens the file manager at a log file with the file selected (Windows
+/// Explorer, macOS Finder). Falls back to opening the file itself on other
+/// platforms. Returns the resolved log path so the UI can show it.
+fn reveal_log_file(
+    _app: &tauri::AppHandle,
+    log_path: std::path::PathBuf,
+) -> Result<String, String> {
+    let path_str = log_path.to_string_lossy().to_string();
+    if log_path.exists() {
+        crate::log_info!("在文件管理器中定位日志文件 {path_str}");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let status = std::process::Command::new("explorer.exe")
+                .arg(format!("/select,{}", log_path.display()))
+                .creation_flags(0x0800_0000)
+                .spawn()
+                .and_then(|mut c| c.wait());
+            if status.is_ok() {
+                return Ok(path_str);
+            }
+            crate::log_warn!("explorer /select 失败，改用默认打开方式");
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let status = std::process::Command::new("open")
+                .arg("-R")
+                .arg(&log_path)
+                .spawn()
+                .and_then(|mut c| c.wait());
+            if status.is_ok() {
+                return Ok(path_str);
+            }
+            crate::log_warn!("open -R 失败，改用默认打开方式");
+        }
+        // Fallback: open the file with its default application. This also
+        // covers Linux (no built-in file-selection reveal).
+        open::that(&log_path).map_err(|e| format!("打开日志文件失败: {e}"))?;
+        Ok(path_str)
+    } else {
+        // The log file does not exist yet: open the log directory instead.
+        let dir = log_path
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_default();
+        crate::log_info!("日志文件不存在，打开日志目录 {}", dir.display());
+        open::that(&dir).map_err(|e| format!("打开日志目录失败: {e}"))?;
+        Ok(dir.to_string_lossy().to_string())
+    }
+}
+
+/// Opens the launcher's own data directory (config, homes, logs, …).
+#[tauri::command]
+pub fn open_launcher_directory(state: State<'_, AppState>) -> Result<String, String> {
+    let dir = state.data_dir.clone();
+    if !dir.is_dir() {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
+    }
+    crate::log_info!("在文件管理器中打开启动器数据目录 {}", dir.display());
+    open::that(&dir).map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+/// Reveals the launcher runtime log (`<data_dir>/logs/latest.log`) in the
+/// file manager with the file selected, creating the directory when needed.
+#[tauri::command]
+pub fn open_launcher_log(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let log_dir = state.data_dir.join("logs");
+    std::fs::create_dir_all(&log_dir).map_err(|e| format!("创建日志目录失败: {e}"))?;
+    reveal_log_file(&app, log_dir.join("latest.log"))
+}
+
+/// Reveals one instance's runtime log (`<data_dir>/logs/<instance_id>.log`)
+/// in the file manager with the file selected.
+#[tauri::command]
+pub fn open_instance_log(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<String, String> {
+    {
+        let cfg = state.config.lock().unwrap();
+        if !cfg.instances.iter().any(|i| i.id == instance_id) {
+            return Err("实例不存在".to_string());
+        }
+    }
+    let log_dir = state.data_dir.join("logs");
+    std::fs::create_dir_all(&log_dir).map_err(|e| format!("创建日志目录失败: {e}"))?;
+    reveal_log_file(&app, log_dir.join(format!("{instance_id}.log")))
+}
+
+/// Opens the DSH_HOME directory of one instance in the file manager.
+#[tauri::command]
+pub fn open_instance_directory(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<String, String> {
+    let home = {
+        let cfg = state.config.lock().unwrap();
+        let inst = cfg
+            .instances
+            .iter()
+            .find(|i| i.id == instance_id)
+            .ok_or_else(|| "实例不存在".to_string())?;
+        cfg.homes
+            .iter()
+            .find(|h| h.id == inst.home_id)
+            .map(|h| h.path.clone())
+            .ok_or_else(|| "DSH_HOME 不存在".to_string())?
+    };
+    if !home.is_dir() {
+        std::fs::create_dir_all(&home).map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    crate::log_info!(
+        "在文件管理器中打开实例 {} 的 DSH_HOME {}",
+        instance_id,
+        home.display()
+    );
+    open::that(&home).map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(home.to_string_lossy().to_string())
 }
 
 // ---------------------------------------------------------------------------

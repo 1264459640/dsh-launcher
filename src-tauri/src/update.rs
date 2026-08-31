@@ -8,10 +8,10 @@
 //! (`error sending request for url ...`). Passing the public client id raises
 //! the unauth quota to 5000 req/h, exactly as the plugin marketplace does.
 //!
-//! Channel follows the running build: a `-dev.<run>` build looks at every
-//! published release (including prereleases, and a shipped stable outranks a
-//! dev build), while a stable build only considers releases without a semver
-//! pre-release segment.
+//! Channel is chosen by the user in the launcher settings: the `release`
+//! channel only considers releases without a semver pre-release segment,
+//! while `dev` (default) also looks at prereleases and treats any published
+//! stable newer than the running build as an update.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -68,7 +68,8 @@ fn parse_releases_json(body: &[u8]) -> Result<Vec<ReleaseEntry>, String> {
 }
 
 /// Picks the newest published release strictly newer than `current`.
-/// Dev channel sees prereleases and stables; stable channel only stables.
+/// `dev_channel` sees prereleases and stables; the release channel sees only
+/// stables (pre-releases are ignored).
 fn pick_latest<'a>(
     current: &semver::Version,
     dev_channel: bool,
@@ -83,12 +84,22 @@ fn pick_latest<'a>(
         .map(|(_, r)| r)
 }
 
+/// The update-check channel: "dev" (default) also sees prereleases,
+/// "release" only considers stable releases.
+fn parse_channel(raw: Option<&str>) -> Result<bool, String> {
+    match raw.unwrap_or("dev").trim().to_ascii_lowercase().as_str() {
+        "dev" => Ok(true),
+        "release" => Ok(false),
+        other => Err(format!("无效的更新渠道: {other}")),
+    }
+}
+
 #[tauri::command]
-pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
+pub async fn check_launcher_update(channel: Option<String>) -> Result<LauncherUpdateInfo, String> {
     let current_raw = env!("CARGO_PKG_VERSION");
     let current = semver::Version::parse(current_raw)
         .map_err(|e| format!("当前版本号无效 {current_raw}: {e}"))?;
-    let dev_channel = current_raw.contains("-dev.");
+    let dev_channel = parse_channel(channel.as_deref())?;
 
     let url = crate::plugins::github_api_url(RELEASES_API);
     let client = crate::proxy::apply(reqwest::Client::builder())
@@ -96,7 +107,10 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
         .user_agent("dsh-launcher")
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
-    crate::log_debug!("检查启动器更新：{url}");
+    crate::log_debug!(
+        "检查启动器更新（{channel} 渠道）：{url}",
+        channel = if dev_channel { "dev" } else { "release" }
+    );
     let resp = client
         .get(&url)
         .send()
@@ -120,7 +134,7 @@ pub async fn check_launcher_update() -> Result<LauncherUpdateInfo, String> {
         Some(r) => crate::log_info!(
             "发现新版本 {}（当前 {current_raw}，{dev} 渠道）",
             r.tag_name,
-            dev = if dev_channel { "dev" } else { "stable" }
+            dev = if dev_channel { "dev" } else { "release" }
         ),
         None => crate::log_info!("启动器已是最新（{current_raw}）"),
     }
@@ -199,6 +213,15 @@ mod tests {
             tag_of(pick_latest(&current, false, &releases)),
             Some("v0.2.0".to_string())
         );
+    }
+
+    #[test]
+    fn parse_channel_accepts_dev_and_release() {
+        assert!(parse_channel(None).unwrap());
+        assert!(parse_channel(Some("dev")).unwrap());
+        assert!(parse_channel(Some("DEV")).unwrap());
+        assert!(!parse_channel(Some("release")).unwrap());
+        assert!(parse_channel(Some("stable")).is_err());
     }
 
     #[test]

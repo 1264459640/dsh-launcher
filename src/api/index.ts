@@ -561,6 +561,14 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       // Browser preview: a real new tab is the expected behavior here.
       window.open(String(args?.url ?? ''), '_blank', 'noopener,noreferrer')
       return undefined as T
+    case 'open_launcher_directory':
+    case 'open_launcher_log':
+    case 'open_instance_log':
+    case 'open_instance_directory':
+      // Browser preview has no file manager; the target path is reported as-is.
+      return 'C:\\Users\\Administrator\\AppData\\Roaming\\in.dsh-plug.dsh-launcher' as T
+    case 'get_launcher_directory':
+      return 'C:\\Users\\Administrator\\AppData\\Roaming\\in.dsh-plug.dsh-launcher' as T
     case 'export_modpack': {
       const input = args?.input as { out_dir?: string; profile?: string } | undefined
       return `${input?.out_dir ?? '.'}/${input?.profile ?? 'profile'}-1.0.0.tgz` as T
@@ -684,15 +692,20 @@ async function mockCall<T>(cmd: string, args?: Record<string, unknown>): Promise
       saveDb(db)
       return db.settings as T
     }
-    case 'check_launcher_update':
+    case 'check_launcher_update': {
+      // Browser preview: honor the channel; the release channel reports the
+      // same fake dev build as up-to-date so the filter is observable.
+      const channel = (args?.channel as string | undefined) ?? 'dev'
+      const dev = channel !== 'release'
       return {
         current: '0.2.0-dev.1',
-        channel: 'dev',
-        up_to_date: false,
-        latest: '0.2.0-dev.2',
-        url: 'https://github.com/dsh-plugins/dsh-launcher/releases',
-        published_at: new Date().toISOString(),
+        channel: dev ? 'dev' : 'stable',
+        up_to_date: !dev,
+        latest: dev ? '0.2.0-dev.2' : null,
+        url: dev ? 'https://github.com/dsh-plugins/dsh-launcher/releases' : null,
+        published_at: dev ? new Date().toISOString() : null,
       } as T
+    }
     // ---- Plugin marketplace mocks (browser preview) ----
     case 'fetch_plugin_market': {
       const q = ((args?.query as string) ?? '').trim().toLowerCase()
@@ -960,7 +973,20 @@ export const api = {
   updateSettings: (settings: Partial<LauncherSettings>) => call<LauncherSettings>('update_settings', { settings }),
   fetchNews: (source: string) => call<string>('fetch_news', { source }),
 
-  checkLauncherUpdate: () => call<LauncherUpdateInfo>('check_launcher_update'),
+  /** Checks GitHub for a newer launcher release on the given channel. */
+  checkLauncherUpdate: (channel: 'dev' | 'release' = 'dev') =>
+    call<LauncherUpdateInfo>('check_launcher_update', { channel }),
+  /** The launcher's own data directory (shown next to the open button). */
+  getLauncherDirectory: () => call<string>('get_launcher_directory'),
+  /** Opens the launcher data directory in the system file manager. */
+  openLauncherDirectory: () => call<string>('open_launcher_directory'),
+  /** Reveals the launcher runtime log (latest.log) with the file selected. */
+  openLauncherLog: () => call<string>('open_launcher_log'),
+  /** Reveals one instance's runtime log with the file selected. */
+  openInstanceLog: (instanceId: string) => call<string>('open_instance_log', { instanceId }),
+  /** Opens an instance's DSH_HOME directory in the file manager. */
+  openInstanceDirectory: (instanceId: string) =>
+    call<string>('open_instance_directory', { instanceId }),
   /** The running launcher's own version (stamped at build time by CI). */
   async getLauncherVersion(): Promise<string> {
     if (isTauri) {
