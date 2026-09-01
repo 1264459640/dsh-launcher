@@ -73,6 +73,8 @@ jobs:
         run: node ci/check-versions.mjs
       - name: Release-note classifier tests
         run: node --test ci/release-notes.test.mjs
+      - name: Bump-version tests
+        run: node --test ci/bump-version.test.mjs
 
   prepare:
     needs: [quality, integration]
@@ -181,3 +183,37 @@ jobs:
             "${{ needs.prepare.outputs.release_id }}" \
             "${{ needs.prepare.outputs.tag }}" \
             "${{ needs.prepare.outputs.prerelease }}"
+
+  # After a STABLE release (v0.2.4 etc.), bump the manifest version to the
+  # next patch (0.2.5) so the next release tag is one patch ahead. Dev builds
+  # (v0.2.4-dev.N) and pre-releases never trigger this job.
+  bump-version:
+    name: Bump version to next patch
+    needs: [prepare, build]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.prepare.outputs.prerelease == 'false' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The commit must land on the branch the tag points at (main).
+          ref: main
+          fetch-depth: 0
+      - name: Bump manifest version
+        id: bump
+        run: |
+          node ci/bump-version.mjs "${{ needs.prepare.outputs.tag }}"
+      - name: Commit and push version bump
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
+          if git diff --cached --quiet; then
+            echo "no version change to commit (already bumped)"
+            exit 0
+          fi
+          git commit -m "chore(release): bump version to next patch"
+          git push origin main
