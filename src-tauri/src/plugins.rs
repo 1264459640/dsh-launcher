@@ -769,9 +769,414 @@ fn read_profile_manifest(dir: &std::path::Path) -> Result<serde_json::Value, Str
 /// cordis id for a package: bundles register under their unscoped short name
 /// (dsh-auxiliary) unless the package declares otherwise. We default to the
 /// last path segment without the scope.
+///
+/// Only safe for insert-mounted (plain) packages, where the launcher itself
+/// wrote the mount row with this id. For bundle-mounted packages the real
+/// entry ids live in the bundle's own patch file — prefer
+/// [`installed_entry_ids`], which reads them.
 pub fn cordis_id_of(package: &str) -> String {
     let last = package.rsplit('/').next().unwrap_or(package);
     last.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// cordis.patch.yml line editing (indentation-aware)
+//
+// The patch file is a top-level YAML array of loader patch rows. Launcher
+// edits stay line-based (no YAML dependency, comments preserved), so every
+// edit must be strict about what is a TOP-LEVEL row (indent 0) versus a
+// nested line inside an `- insert:` block. The previous trim-based matcher
+// consumed the nested `- id:` line of the very mount row it was toggling,
+// leaving a name-only entry the loader then mounts under a random id — its
+// disable row could never match again (issue-09-01-plugin-toggle-ineffective).
+// ---------------------------------------------------------------------------
+
+/// Indentation width (columns of spaces/tabs) of a raw line.
+fn line_indent(line: &str) -> usize {
+    line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+}
+
+/// Strips one pair of matching single/double quotes from a scalar value.
+fn unquote_scalar(value: &str) -> String {
+    let v = value.trim();
+    if v.len() >= 2
+        && ((v.starts_with('\'') && v.ends_with('\'')) || (v.starts_with('"') && v.ends_with('"')))
+    {
+        v[1..v.len() - 1].to_string()
+    } else {
+        v.to_string()
+    }
+}
+
+/// The id an item header carries: `- id: x` / `id: x` (after trim).
+fn id_of_header(trimmed: &str) -> Option<String> {
+    let rest = trimmed
+        .strip_prefix("- id:")
+        .or_else(|| trimmed.strip_prefix("id:"))?;
+    let v = rest.trim();
+    (!v.is_empty()).then(|| unquote_scalar(v))
+}
+
+/// A top-level patch row id: an `id:` header at indent 0. Nested `- id:`
+/// lines inside `- insert:` blocks are mount rows, not patch rows, and never
+/// match. Comments and blanks are not headers.
+fn top_level_row_id(line: &str) -> Option<String> {
+    let t = line.trim();
+    if line_indent(line) != 0 || t.is_empty() || t.starts_with('#') {
+        return None;
+    }
+    t.strip_prefix("- id:").and_then(|rest| {
+        let v = rest.trim();
+        (!v.is_empty()).then(|| unquote_scalar(v))
+    })
+}
+
+/// One segment of the patch file: a top-level `- …` item with its indented
+/// children, or a run of non-item lines (comments, blanks, `[]` placeholders)
+/// kept verbatim.
+enum PatchSeg {
+    Verbatim(Vec<String>),
+    Item {
+        header: String,
+        children: Vec<String>,
+    },
+}
+
+/// Splits the patch file into top-level items plus verbatim runs. A top-level
+/// item opens at an indent-0 `- ` line; indented lines and blanks after it
+/// are its children. Everything else is preserved verbatim.
+fn split_patch_segments(raw: &str) -> Vec<PatchSeg> {
+    let mut segs: Vec<PatchSeg> = Vec::new();
+    for line in raw.lines() {
+        let opens_item = line_indent(line) == 0 && line.trim_start().starts_with("- ");
+        let attaches = (line_indent(line) > 0 || line.trim().is_empty())
+            && matches!(segs.last(), Some(PatchSeg::Item { .. }));
+        if attaches {
+            if let Some(PatchSeg::Item { children, .. }) = segs.last_mut() {
+                children.push(line.to_string());
+                continue;
+            }
+        }
+        if opens_item {
+            segs.push(PatchSeg::Item {
+                header: line.to_string(),
+                children: Vec::new(),
+            });
+        } else if let Some(PatchSeg::Verbatim(v)) = segs.last_mut() {
+            v.push(line.to_string());
+        } else {
+            segs.push(PatchSeg::Verbatim(vec![line.to_string()]));
+        }
+    }
+    segs
+}
+
+/// Trims stray blank edges and appends the `[]` placeholder back when a
+/// document lost its last row, so the file stays a valid top-level array
+/// (comment headers survive).
+fn finalize_patch_body(mut lines: Vec<String>) -> String {
+    while lines.first().map(|l| l.trim().is_empty()) == Some(true) {
+        lines.remove(0);
+    }
+    while lines.last().map(|l| l.trim().is_empty()) == Some(true) {
+        lines.pop();
+    }
+    let mut result = lines.join("\n");
+    if !result.is_empty() && !result.ends_with('\n') {
+        result.push('\n');
+    }
+    let body: String = result
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with('#')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if body.trim().is_empty() {
+        result.push_str("[]\n");
+    }
+    result
+}
+
+/// The `disabled:` direct-child state of a top-level item: `Some(false)`
+/// disables (`disabled: true`, a `!!js` expression, or null), `Some(true)` is
+/// an explicit `disabled: false`. Only indent-2 children count — deeper lines
+/// belong to `config:` blocks and must never be read as disable rows.
+fn direct_disabled(child: &str) -> Option<bool> {
+    if line_indent(child) != 2 {
+        return None;
+    }
+    let t = child.trim();
+    if t == "disabled: false" {
+        return Some(true);
+    }
+    if t.starts_with("disabled:") {
+        return Some(false);
+    }
+    None
+}
+
+/// Adds a disable row for one entry id when none exists yet (append-only:
+/// patch rows apply in order, so the appended row wins over earlier rows for
+/// the same id; mount rows and config rows stay untouched).
+fn ensure_disable_row(raw: &str, cordis_id: &str) -> String {
+    for seg in split_patch_segments(raw) {
+        if let PatchSeg::Item { header, children } = seg {
+            if top_level_row_id(&header).as_deref() == Some(cordis_id)
+                && children.iter().any(|c| direct_disabled(c) == Some(false))
+            {
+                return raw.to_string(); // already disabled — idempotent
+            }
+        }
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut has_item = false;
+    for seg in split_patch_segments(raw) {
+        match seg {
+            PatchSeg::Item { header, children } => {
+                has_item = true;
+                lines.push(header);
+                lines.extend(children);
+            }
+            PatchSeg::Verbatim(v) => {
+                lines.extend(v.into_iter().filter(|l| l.trim() != "[]"));
+            }
+        }
+    }
+    while lines.last().map(|l| l.trim().is_empty()) == Some(true) {
+        lines.pop();
+    }
+    if has_item {
+        lines.push(String::new());
+    }
+    lines.push(format!("- id: {cordis_id}"));
+    lines.push("  disabled: true".to_string());
+    let mut result = lines.join("\n");
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+/// Removes the disable rows of one entry id. Pure disable rows (`- id: X`
+/// followed only by `disabled:` / comment / blank children) go entirely; a
+/// mixed row (config etc.) keeps its content and loses only its direct
+/// `disabled: true` child line.
+fn remove_disable_rows(raw: &str, cordis_id: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for seg in split_patch_segments(raw) {
+        match seg {
+            PatchSeg::Verbatim(v) => {
+                lines.extend(v.into_iter().filter(|l| l.trim() != "[]"));
+            }
+            PatchSeg::Item { header, children } => {
+                match top_level_row_id(&header) {
+                    Some(id) if id == cordis_id => {
+                        let pure = children.iter().all(|c| {
+                            let t = c.trim();
+                            t.is_empty()
+                                || t.starts_with('#')
+                                || (line_indent(c) == 2 && t.starts_with("disabled:"))
+                        });
+                        if pure {
+                            continue; // the whole disable row goes
+                        }
+                        lines.push(header);
+                        for c in children {
+                            if line_indent(&c) == 2 && c.trim() == "disabled: true" {
+                                continue;
+                            }
+                            lines.push(c);
+                        }
+                    }
+                    _ => {
+                        lines.push(header);
+                        lines.extend(children);
+                    }
+                }
+            }
+        }
+    }
+    finalize_patch_body(lines)
+}
+
+/// Every loader entry id the patch file mounts itself: the first-level nested
+/// items of its `- insert:` blocks. Deeper `- id:` lines belong to nested
+/// list values (group configs), not mounts.
+fn collect_mount_ids(raw: &str) -> std::collections::HashSet<String> {
+    let mut ids = std::collections::HashSet::new();
+    for seg in split_patch_segments(raw) {
+        let PatchSeg::Item { header, children } = seg else {
+            continue;
+        };
+        if !header.trim().starts_with("- insert:") {
+            continue;
+        }
+        let mut item_indent: Option<usize> = None;
+        for line in &children {
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if t.starts_with("- ") {
+                let indent = *item_indent.get_or_insert(line_indent(line));
+                if line_indent(line) == indent {
+                    if let Some(id) = id_of_header(t) {
+                        ids.insert(id);
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Heals the two corruption shapes earlier launcher versions wrote when
+/// toggling insert-mounted plugins (their nested `- id:` header was consumed):
+///   1. an `- insert:` block holding only orphaned `name: 'PKG'` lines —
+///      the `- id: <cordis id>` item header is restored before each;
+///   2. an empty `- insert:` husk — dropped.
+/// Everything else is preserved verbatim: blocks with ids, configs, comments
+/// or any other keys are never rewritten.
+fn repair_cordis_patch(raw: &str) -> String {
+    let mut taken_ids = collect_mount_ids(raw);
+    let mut lines: Vec<String> = Vec::new();
+    for seg in split_patch_segments(raw) {
+        let PatchSeg::Item { header, children } = seg else {
+            if let PatchSeg::Verbatim(v) = seg {
+                lines.extend(v);
+            }
+            continue;
+        };
+        let is_insert = header.trim().starts_with("- insert:");
+        let has_nested_item = children
+            .iter()
+            .any(|c| line_indent(c) > 0 && c.trim().starts_with("- "));
+        let only_name_children = is_insert
+            && !has_nested_item
+            && !children.is_empty()
+            && children.iter().all(|c| {
+                let t = c.trim();
+                t.is_empty() || (line_indent(c) > 0 && t.starts_with("name:"))
+            });
+        if only_name_children {
+            lines.push(header);
+            for c in children {
+                let t = c.trim();
+                if t.is_empty() {
+                    lines.push(c);
+                    continue;
+                }
+                let package = unquote_scalar(t.strip_prefix("name:").unwrap_or("").trim());
+                let cid = cordis_id_of(&package);
+                let name_indent = line_indent(&c);
+                // Skip ambiguous or duplicate-mount cases: anything that is
+                // not a plain quoted/unquoted package name, an id already
+                // mounted elsewhere, or unusable indentation.
+                if package.is_empty()
+                    || package.contains(' ')
+                    || package.contains('#')
+                    || name_indent < 4
+                    || taken_ids.contains(&cid)
+                {
+                    lines.push(c);
+                    continue;
+                }
+                lines.push(format!("{}- id: {}", " ".repeat(name_indent - 2), cid));
+                lines.push(c);
+                taken_ids.insert(cid);
+            }
+        } else if is_insert
+            && !has_nested_item
+            && children
+                .iter()
+                .all(|c| c.trim().is_empty() || c.trim().starts_with('#'))
+        {
+            // `- insert:` with no rows left: husk dropped.
+        } else {
+            lines.push(header);
+            lines.extend(children);
+        }
+    }
+    let mut result = lines.join("\n");
+    if !result.is_empty() && !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+/// Removes a plugin's nested items from an `- insert:` block; `None` when no
+/// nested item remains (the caller drops the emptied block).
+fn strip_insert_children(
+    children: &[String],
+    cordis_id: &str,
+    plugin_id: &str,
+) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    let mut skip_rest = false;
+    let mut skip_indent = 0usize;
+    for line in children {
+        let indent = line_indent(line);
+        let t = line.trim();
+        if skip_rest {
+            if t.is_empty() || indent > skip_indent {
+                continue;
+            }
+            skip_rest = false; // next sibling item
+        }
+        if indent > 0 && t.starts_with("- ") {
+            if let Some(id) = id_of_header(t) {
+                if id == cordis_id || id == plugin_id {
+                    skip_rest = true;
+                    skip_indent = indent;
+                    continue;
+                }
+            }
+        }
+        out.push(line.to_string());
+    }
+    while out.last().map(|l| l.trim().is_empty()) == Some(true) {
+        out.pop();
+    }
+    let has_item = out
+        .iter()
+        .any(|l| line_indent(l) > 0 && l.trim().starts_with("- "));
+    has_item.then_some(out)
+}
+
+/// Writes the patch file atomically (tmp + rename) so a running instance's
+/// patch watcher never parses a half-written document; falls back to a direct
+/// write when the rename is refused (e.g. a briefly locked target on Windows).
+fn write_patch_file(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("cordis.patch.yml");
+    let tmp = path.with_file_name(format!("{name}.tmp"));
+    match std::fs::write(&tmp, contents).and_then(|()| std::fs::rename(&tmp, path)) {
+        Ok(()) => Ok(()),
+        Err(rename_err) => {
+            std::fs::remove_file(&tmp).ok();
+            std::fs::write(path, contents)
+                .map_err(|e| format!("写入 cordis.patch.yml 失败: {e} (rename: {rename_err})"))
+        }
+    }
+}
+
+/// Best-effort loader entry ids a bundle package actually mounts: reads its
+/// manifest's `dsh.bundle.patch` file from the profile's node_modules and
+/// collects the insert ids. `None` when anything is missing, unparsable or
+/// empty — callers fall back to the unscoped-name guess.
+fn installed_entry_ids(profile_dir: &std::path::Path, package: &str) -> Option<Vec<String>> {
+    let pkg_dir = profile_dir.join("node_modules").join(package);
+    let manifest_raw = std::fs::read_to_string(pkg_dir.join("package.json")).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_raw).ok()?;
+    let patch_rel = manifest.get("dsh")?.get("bundle")?.get("patch")?.as_str()?;
+    let patch_raw = std::fs::read_to_string(pkg_dir.join(patch_rel)).ok()?;
+    let mut ids: Vec<String> = collect_mount_ids(&patch_raw).into_iter().collect();
+    ids.sort();
+    (!ids.is_empty()).then_some(ids)
 }
 
 // ---------------------------------------------------------------------------
@@ -821,16 +1226,33 @@ pub async fn list_installed_plugins(
 
     // Disabled set from cordis.patch.yml (`- id: <cordis-id>` + `disabled: true`).
     let disabled = read_disabled_ids(&dir);
+    let bundle_set: std::collections::HashSet<String> = manifest
+        .pointer("/dsh/profile/bundles")
+        .and_then(|b| b.as_array())
+        .map(|b| {
+            b.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let out = ids
         .into_iter()
         .map(|id| {
-            let cordis_id = cordis_id_of(&id);
-            let enabled = !disabled.contains(&cordis_id) && !disabled.contains(&id);
+            // A bundle mounts under the ids its own patch declares, which the
+            // unscoped-name guess can miss; a plain package mounts under its
+            // cordis id (the launcher wrote the insert row).
+            let entry_ids = if bundle_set.contains(&id) {
+                installed_entry_ids(&dir, &id)
+            } else {
+                None
+            };
+            let entry_ids = entry_ids.unwrap_or_else(|| vec![cordis_id_of(&id)]);
+            let enabled = entry_ids.iter().all(|e| !disabled.contains(e));
             InstalledPlugin {
                 version: versions.get(&id).cloned(),
                 enabled,
-                cordis_id: Some(cordis_id),
+                cordis_id: entry_ids.first().cloned(),
                 id,
             }
         })
@@ -840,6 +1262,13 @@ pub async fn list_installed_plugins(
 
 /// Parse disabled cordis ids from a profile's cordis.patch.yml. We do a
 /// lightweight line scan (avoid pulling a YAML parser dependency for this).
+///
+/// Only TOP-LEVEL rows count: an `- id: X` item header at indent 0 followed by
+/// a direct `disabled: true` child (indent 2). Nested `- id:` lines inside
+/// `- insert:` mount blocks are mount rows, not patch rows, and are ignored —
+/// as are quoted ids (`- id: "x"`), `disabled: false`, and anything deeper
+/// than indent 2 (a `disabled:` key inside a block's `config:` is config data,
+/// not a disable row).
 fn read_disabled_ids(dir: &std::path::Path) -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
     let path = dir.join("cordis.patch.yml");
@@ -848,16 +1277,22 @@ fn read_disabled_ids(dir: &std::path::Path) -> std::collections::HashSet<String>
     };
     let mut current_id: Option<String> = None;
     for line in raw.lines() {
+        let indent = line_indent(line);
         let t = line.trim();
-        if t.starts_with("- id:") {
-            current_id = Some(t.trim_start_matches("- id:").trim().to_string());
-        } else if t.starts_with("id:") && !line.starts_with(' ') && !line.starts_with('\t') {
-            current_id = Some(t.trim_start_matches("id:").trim().to_string());
+        if indent == 0 {
+            if let Some(id) = top_level_row_id(line) {
+                current_id = Some(id);
+            } else if t.is_empty() || t.starts_with('#') {
+                // comments / blank separators inside a row keep it open
+            } else {
+                // another top-level row (`- insert:`, …) ends the previous one
+                current_id = None;
+            }
         } else if t == "disabled: true" {
             if let Some(id) = current_id.take() {
                 set.insert(id);
             }
-        } else if t.starts_with("- ") && !t.starts_with("- id:") {
+        } else if t == "disabled: false" {
             current_id = None;
         }
     }
@@ -894,6 +1329,12 @@ pub(crate) fn resolve_instance(
 
 /// Sets plugins enabled/disabled in a profile's cordis.patch.yml by adding or
 /// removing `disabled: true` rows. Batch-capable via plugin_ids.
+///
+/// Serialization: takes the same per-profile lock as installs/uninstalls —
+/// both sides rewrite this file, so a concurrent toggle's read-modify-write
+/// used to be able to drop the other side's rows (e.g. an install's insert
+/// row). Bundle-mounted plugins toggle under the ids their own bundle patch
+/// declares; plain insert-mounted packages under their cordis id.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn set_plugins_enabled(
     state: State<'_, AppState>,
@@ -903,6 +1344,9 @@ pub async fn set_plugins_enabled(
     let dir = profile_dir(&home_path, &input.profile);
     let patch_path = dir.join("cordis.patch.yml");
 
+    let lock = profile_lock(&state, &dir).await;
+    let _guard = lock.lock().await;
+
     let mut raw = if patch_path.exists() {
         std::fs::read_to_string(&patch_path)
             .map_err(|e| format!("读取 cordis.patch.yml 失败: {e}"))?
@@ -910,13 +1354,20 @@ pub async fn set_plugins_enabled(
         String::new()
     };
 
+    // Heal corruption left by older versions (consumed mount-row id lines,
+    // empty insert husks) before editing on top of the file.
+    raw = repair_cordis_patch(&raw);
+
     for package in &input.plugin_ids {
-        let cordis_id = cordis_id_of(package);
-        raw = set_disabled_row(&raw, &cordis_id, input.enabled);
+        let entry_ids =
+            installed_entry_ids(&dir, package).unwrap_or_else(|| vec![cordis_id_of(package)]);
+        for id in entry_ids {
+            raw = set_disabled_row(&raw, &id, input.enabled);
+        }
     }
 
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建 profile 目录失败: {e}"))?;
-    std::fs::write(&patch_path, raw).map_err(|e| format!("写入 cordis.patch.yml 失败: {e}"))?;
+    write_patch_file(&patch_path, &raw)?;
     Ok(())
 }
 
@@ -978,11 +1429,17 @@ pub async fn uninstall_plugin(
     if patch_path.exists() {
         let raw = std::fs::read_to_string(&patch_path)
             .map_err(|e| format!("读取 cordis.patch.yml 失败: {e}"))?;
-        let cordis_id = cordis_id_of(&input.plugin_id);
-        let cleaned = strip_cordis_rows(&raw, &cordis_id, &input.plugin_id);
+        // Drop every row the plugin could own: the entry ids its bundle patch
+        // declares (bundle-mounted) or its cordis id (insert-mounted), plus
+        // anything keyed by the raw package id.
+        let entry_ids = installed_entry_ids(&dir, &input.plugin_id)
+            .unwrap_or_else(|| vec![cordis_id_of(&input.plugin_id)]);
+        let mut cleaned = raw;
+        for id in &entry_ids {
+            cleaned = strip_cordis_rows(&cleaned, id, &input.plugin_id);
+        }
         if cleaned != raw {
-            std::fs::write(&patch_path, &cleaned)
-                .map_err(|e| format!("写入 cordis.patch.yml 失败: {e}"))?;
+            write_patch_file(&patch_path, &cleaned)?;
         }
     }
 
@@ -993,129 +1450,59 @@ pub async fn uninstall_plugin(
 /// plain `- id:` / `id:` rows, including `- insert:` wrappers) and restores
 /// the `[]` placeholder when the document becomes empty.
 fn strip_cordis_rows(raw: &str, cordis_id: &str, plugin_id: &str) -> String {
-    let mut out: Vec<String> = Vec::new();
-    let mut skip = false;
-    for line in raw.lines() {
-        let t = line.trim();
-        if t == "[]" {
-            continue;
-        }
-        // Start of a block for the target: `- id: <id>` (plain or insert row).
-        let is_target = t == format!("- id: {cordis_id}")
-            || t == format!("id: {cordis_id}")
-            || t == format!("- id: {plugin_id}")
-            || t == format!("id: {plugin_id}");
-        if is_target {
-            skip = true;
-            continue;
-        }
-        if skip {
-            // Inside a target block: drop indented child lines and blank
-            // separators; stop at the next top-level key.
-            if t.is_empty() {
-                continue;
+    let mut lines: Vec<String> = Vec::new();
+    for seg in split_patch_segments(raw) {
+        match seg {
+            PatchSeg::Verbatim(v) => {
+                lines.extend(v.into_iter().filter(|l| l.trim() != "[]"));
             }
-            let indent = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
-            if indent > 0 {
-                continue;
+            PatchSeg::Item { header, children } => {
+                let top = top_level_row_id(&header);
+                let is_target =
+                    matches!(top.as_deref(), Some(id) if id == cordis_id || id == plugin_id);
+                if is_target {
+                    // The whole top-level row (disable row / config row) goes.
+                    continue;
+                }
+                if header.trim().starts_with("- insert:") {
+                    match strip_insert_children(&children, cordis_id, plugin_id) {
+                        Some(kept) => {
+                            lines.push(header);
+                            lines.extend(kept);
+                        }
+                        // The plugin's item was the block's only child: the
+                        // emptied `- insert:` husk is a patch that can never
+                        // apply — drop it instead of leaving loader noise.
+                        None => {}
+                    }
+                } else {
+                    lines.push(header);
+                    lines.extend(children);
+                }
             }
-            skip = false;
         }
-        out.push(line.to_string());
     }
-
-    let mut cleaned: Vec<String> = out;
-    while cleaned.last().map(|l| l.trim().is_empty()) == Some(true) {
-        cleaned.pop();
-    }
-    let mut result = cleaned.join("\n");
-    if !result.ends_with('\n') {
-        result.push('\n');
-    }
-    let body: String = result
-        .lines()
-        .filter(|l| {
-            let t = l.trim();
-            !t.is_empty() && !t.starts_with('#')
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if body.trim().is_empty() {
-        if !result.ends_with('\n') {
-            result.push('\n');
-        }
-        result.push_str("[]\n");
-    }
-    result
+    finalize_patch_body(lines)
 }
 
-/// Add or remove a `disabled: true` row for a cordis id in cordis.patch.yml.
+/// Set/unset the `disabled: true` row for one entry id in cordis.patch.yml.
+///
+/// Strategy — "append on disable, extract on enable", never rewriting anything
+/// else (see the line-editing section above for why the old trim-based block
+/// rewrite had to go):
+/// * disable appends a top-level `- id: X` + `disabled: true` row when no
+///   disable row exists yet; patch rows apply in order, so the appended row
+///   wins over any earlier row for the id — insert mount rows and config rows
+///   stay untouched;
+/// * enable removes pure disable rows (`- id: X` followed only by
+///   `disabled:`/blank lines) entirely; in mixed rows (config etc.) only the
+///   direct `disabled:` child line is removed and the rest of the row stays.
 fn set_disabled_row(raw: &str, cordis_id: &str, enabled: bool) -> String {
-    // Remove any existing rows for this id (both plain and commented forms).
-    let mut out: Vec<String> = Vec::new();
-    let mut skip_block = false;
-    for line in raw.lines() {
-        let t = line.trim();
-        // A top-level `[]` placeholder is dropped when we have any real entry
-        // to write; it is kept only while the document stays empty.
-        if t == "[]" {
-            continue;
-        }
-        let is_target_id = t == format!("- id: {cordis_id}") || t == format!("id: {cordis_id}");
-        if is_target_id {
-            // Start of a block for this id; look ahead: if it is a pure
-            // `disabled: true` block we drop it entirely.
-            skip_block = true;
-            continue;
-        }
-        if skip_block {
-            // Inside the block: only `disabled:` and blank lines belong to it.
-            if t == "disabled: true" || t == "disabled: false" || t.is_empty() {
-                skip_block = false; // end of this small block
-                continue;
-            }
-            // Block has other content (config etc.) — keep it, stop skipping.
-            skip_block = false;
-            out.push(line.to_string());
-            continue;
-        }
-        out.push(line.to_string());
+    if enabled {
+        remove_disable_rows(raw, cordis_id)
+    } else {
+        ensure_disable_row(raw, cordis_id)
     }
-
-    let mut cleaned: Vec<String> = out;
-    // Trim trailing blank lines.
-    while cleaned.last().map(|l| l.trim().is_empty()) == Some(true) {
-        cleaned.pop();
-    }
-
-    if !enabled {
-        // Append a fresh disable row (block sequence, never after `[]`).
-        cleaned.push(String::new());
-        cleaned.push(format!("- id: {cordis_id}"));
-        cleaned.push("  disabled: true".to_string());
-    }
-
-    let mut result = cleaned.join("\n");
-    if !result.ends_with('\n') {
-        result.push('\n');
-    }
-    // If the document became empty again (everything removed), restore the
-    // `[]` placeholder so the file stays a valid top-level array.
-    let body: String = result
-        .lines()
-        .filter(|l| {
-            let t = l.trim();
-            !t.is_empty() && !t.starts_with('#')
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if body.trim().is_empty() {
-        if !result.ends_with('\n') {
-            result.push('\n');
-        }
-        result.push_str("[]\n");
-    }
-    result
 }
 
 // ---------------------------------------------------------------------------
@@ -1938,8 +2325,17 @@ fn ensure_cordis_insert(dir: &std::path::Path, plugin_id: &str) -> Result<(), St
     } else {
         String::new()
     };
-    // Already mounted (insert row or a config block for the id)?
-    if raw.contains(&format!("id: {cordis_id}")) {
+    // Already mounted (a nested insert item carries the id), or already
+    // patched (a top-level row for the id exists)? The parsed-row check is
+    // strict: the old `raw.contains("id: …")` also matched comment prose and
+    // a stale disable row for a not-yet-mounted plugin, which used to
+    // suppress the mount row entirely ("installed but never active").
+    let mounted = collect_mount_ids(&raw).contains(&cordis_id);
+    let patched = split_patch_segments(&raw).into_iter().any(|seg| {
+        matches!(&seg, PatchSeg::Item { header, .. }
+            if top_level_row_id(header).as_deref() == Some(cordis_id))
+    });
+    if mounted || patched {
         return Ok(());
     }
 
@@ -2393,6 +2789,201 @@ mod tests {
         let out = strip_cordis_rows(raw, "dsh-auxiliary", "@dsh-plugin/dsh-auxiliary");
         assert!(out.contains("[]"), "placeholder restored: {out}");
         assert!(!out.contains("dsh-auxiliary"), "entry removed: {out}");
+    }
+
+    // -------------------------------------------------------------------------
+    // Regression tests for issue-09-01-plugin-toggle-ineffective: the old
+    // trim-based row matcher consumed the nested `- id:` line INSIDE an
+    // `- insert:` mount block, orphaning its `name:` child; the loader then
+    // mounted the name-only entry under a random id and the disable row could
+    // never match again.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn set_disabled_row_leaves_insert_mount_rows_alone() {
+        let raw = "- insert:\n    - id: dsh-auxiliary\n      name: '@dsh-plugin/dsh-auxiliary'\n";
+        let off = set_disabled_row(raw, "dsh-auxiliary", false);
+        // The mount row survives verbatim; the disable row is appended at the
+        // top level where applyEntryPatches can find it.
+        assert!(
+            off.contains("    - id: dsh-auxiliary"),
+            "mount intact: {off}"
+        );
+        assert!(
+            off.contains("      name: '@dsh-plugin/dsh-auxiliary'"),
+            "mount intact: {off}"
+        );
+        assert!(
+            off.contains("\n- id: dsh-auxiliary\n  disabled: true"),
+            "disable appended at top level: {off}"
+        );
+        // Round-trip: enable again and only the disable row goes away.
+        let on = set_disabled_row(&off, "dsh-auxiliary", true);
+        assert!(on.contains("    - id: dsh-auxiliary"), "mount intact: {on}");
+        assert!(!on.contains("disabled: true"), "disable removed: {on}");
+    }
+
+    #[test]
+    fn set_disabled_row_enable_keeps_mixed_config_block() {
+        // A row that carries config alongside `disabled: true`: enabling must
+        // remove only the disabled line — never orphan the config children
+        // (the old implementation dropped the `- id:` header and left
+        // top-level indented lines behind, an invalid document).
+        let raw = "- id: mixer\n  disabled: true\n  config:\n    x: 1\n";
+        let out = set_disabled_row(raw, "mixer", true);
+        assert!(out.contains("- id: mixer"), "header kept: {out}");
+        assert!(out.contains("  config:"), "config kept: {out}");
+        assert!(out.contains("    x: 1"), "config content kept: {out}");
+        assert!(!out.contains("disabled"), "disable line removed: {out}");
+        // And it can be disabled again: the appended row wins over the
+        // untouched config row, which stays valid.
+        let off = set_disabled_row(&out, "mixer", false);
+        assert!(
+            off.contains("\n- id: mixer\n  disabled: true"),
+            "appended: {off}"
+        );
+        assert!(off.contains("  config:"), "config row kept: {off}");
+    }
+
+    #[test]
+    fn set_disabled_row_is_idempotent_for_existing_disable_row() {
+        let raw = "- id: dup\n  disabled: true\n\n- id: other\n  config:\n    a: 1\n";
+        let off1 = set_disabled_row(raw, "dup", false);
+        let off2 = set_disabled_row(&off1, "dup", false);
+        assert_eq!(off1, off2, "disabling twice must not duplicate rows");
+    }
+
+    #[test]
+    fn set_disabled_row_ignores_nested_ids_in_insert_blocks() {
+        // Disabling one plugin must not touch the nested item of another
+        // plugin's insert block either, and the disable row must key on the
+        // TOP-LEVEL row only.
+        let raw = "- insert:\n    - id: dsh-auxiliary\n      name: 'x'\n\n- id: dsh-auxiliary\n  config:\n    y: 2\n";
+        let off = set_disabled_row(raw, "dsh-auxiliary", false);
+        assert!(
+            off.contains("    - id: dsh-auxiliary"),
+            "insert intact: {off}"
+        );
+        assert!(off.contains("  config:"), "config row intact: {off}");
+        assert!(
+            off.contains("\n  disabled: true"),
+            "disable appended: {off}"
+        );
+        // The appended row is the only disabled marker for the id.
+        assert_eq!(off.matches("disabled: true").count(), 1, "off: {off}");
+    }
+
+    #[test]
+    fn repair_cordis_patch_restores_consumed_mount_id() {
+        // The exact corruption shape the buggy version wrote on disable.
+        let raw = "- insert:\n      name: '@dsh-plugin/dsh-auxiliary'\n\n- id: dsh-auxiliary\n  disabled: true\n";
+        let out = repair_cordis_patch(raw);
+        assert!(
+            out.contains("    - id: dsh-auxiliary"),
+            "mount id restored: {out}"
+        );
+        assert!(
+            out.contains("      name: '@dsh-plugin/dsh-auxiliary'"),
+            "name kept: {out}"
+        );
+        assert!(
+            out.contains("- id: dsh-auxiliary\n  disabled: true"),
+            "disable row kept: {out}"
+        );
+        // After the repair the disable row gates the mount again, so another
+        // toggle round-trips cleanly.
+        let on = set_disabled_row(&out, "dsh-auxiliary", true);
+        assert!(on.contains("    - id: dsh-auxiliary"), "mount intact: {on}");
+        assert!(!on.contains("disabled: true"), "disable removed: {on}");
+    }
+
+    #[test]
+    fn repair_cordis_patch_drops_empty_insert_husk() {
+        let raw = "# header\n- insert:\n\n- id: keep\n  config:\n    x: 1\n";
+        let out = repair_cordis_patch(raw);
+        assert!(!out.contains("insert:"), "husk dropped: {out}");
+        assert!(out.contains("# header"), "header kept: {out}");
+        assert!(out.contains("- id: keep"), "other rows kept: {out}");
+    }
+
+    #[test]
+    fn repair_cordis_patch_keeps_valid_insert_blocks() {
+        // Real mount rows (with ids) and MCP-style blocks stay untouched.
+        let raw =
+            "- insert:\n    - id: dsh-auxiliary\n      name: 'x'\n      config:\n        k: 1\n";
+        assert_eq!(repair_cordis_patch(raw), raw);
+        // An orphan whose id would duplicate an existing mount is left as-is:
+        // '@dsh-plugin/dsh-auxiliary' maps to the already-mounted
+        // `dsh-auxiliary` id, so repairing it would duplicate-mount.
+        let dup = "- insert:\n    - id: dsh-auxiliary\n      name: 'x'\n\n- insert:\n      name: '@dsh-plugin/dsh-auxiliary'\n";
+        assert_eq!(repair_cordis_patch(dup), dup);
+    }
+
+    #[test]
+    fn collect_mount_ids_reads_insert_blocks() {
+        let raw = "- insert:\n    - id: a\n      name: 'x'\n\n- id: b\n  config:\n    k: 1\n";
+        let ids = collect_mount_ids(raw);
+        assert!(ids.contains("a"), "nested insert item is a mount: {ids:?}");
+        assert!(
+            !ids.contains("b"),
+            "top-level rows are patches, not mounts: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn installed_entry_ids_reads_bundle_patch() {
+        let dir = std::env::temp_dir().join(format!("dsh-plugins-test-{}", uuid::Uuid::new_v4()));
+        let pkg = dir.join("node_modules").join("@scope").join("fake-bundle");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"@scope/fake-bundle","dsh":{"bundle":{"patch":"patch.yml"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("patch.yml"),
+            "- insert:\n    - id: custom-entry\n      name: 'x'\n",
+        )
+        .unwrap();
+        let ids = installed_entry_ids(&dir, "@scope/fake-bundle");
+        assert_eq!(ids, Some(vec!["custom-entry".to_string()]));
+        // Unresolvable package -> None, callers fall back to the name guess.
+        assert_eq!(installed_entry_ids(&dir, "@scope/missing"), None);
+        // A bundle-less package (no dsh.bundle.patch) -> None.
+        let plain = dir.join("node_modules").join("plain-pkg");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("package.json"), r#"{"name":"plain-pkg"}"#).unwrap();
+        assert_eq!(installed_entry_ids(&dir, "plain-pkg"), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_disabled_ids_ignores_nested_and_quoted_shapes() {
+        let dir = std::env::temp_dir().join(format!("dsh-plugins-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cordis.patch.yml"),
+            concat!(
+                "- insert:\n",
+                "    - id: inner\n",
+                "      name: 'x'\n",
+                "\n",
+                "- id: \"quoted\"\n",
+                "  disabled: true\n",
+                "\n",
+                "- id: top\n",
+                "  disabled: true\n",
+            ),
+        )
+        .unwrap();
+        let set = read_disabled_ids(&dir);
+        assert!(set.contains("quoted"), "quotes stripped: {set:?}");
+        assert!(set.contains("top"), "top-level row: {set:?}");
+        assert!(
+            !set.contains("inner"),
+            "nested mount ids are not disable rows: {set:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
