@@ -1037,6 +1037,7 @@ fn collect_mount_ids(raw: &str) -> std::collections::HashSet<String> {
 ///   1. an `- insert:` block holding only orphaned `name: 'PKG'` lines —
 ///      the `- id: <cordis id>` item header is restored before each;
 ///   2. an empty `- insert:` husk — dropped.
+///
 /// Everything else is preserved verbatim: blocks with ids, configs, comments
 /// or any other keys are never rewritten.
 fn repair_cordis_patch(raw: &str) -> String {
@@ -1465,16 +1466,13 @@ fn strip_cordis_rows(raw: &str, cordis_id: &str, plugin_id: &str) -> String {
                     continue;
                 }
                 if header.trim().starts_with("- insert:") {
-                    match strip_insert_children(&children, cordis_id, plugin_id) {
-                        Some(kept) => {
-                            lines.push(header);
-                            lines.extend(kept);
-                        }
-                        // The plugin's item was the block's only child: the
-                        // emptied `- insert:` husk is a patch that can never
-                        // apply — drop it instead of leaving loader noise.
-                        None => {}
+                    if let Some(kept) = strip_insert_children(&children, cordis_id, plugin_id) {
+                        lines.push(header);
+                        lines.extend(kept);
                     }
+                    // `None`: the plugin's item was the block's only child, so
+                    // the emptied `- insert:` husk is a patch that can never
+                    // apply — drop it instead of leaving loader noise.
                 } else {
                     lines.push(header);
                     lines.extend(children);
