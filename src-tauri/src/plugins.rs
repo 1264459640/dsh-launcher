@@ -1054,9 +1054,19 @@ fn repair_cordis_patch(raw: &str) -> String {
         let has_nested_item = children
             .iter()
             .any(|c| line_indent(c) > 0 && c.trim().starts_with("- "));
+        // An insert block needs an actual orphaned `name:` child to be the
+        // "consumed mount id" shape: a block holding only blanks is an empty
+        // husk (handled below), never a repair target.
+        let name_child_count = children
+            .iter()
+            .filter(|c| {
+                let t = c.trim();
+                !t.is_empty() && line_indent(c) > 0 && t.starts_with("name:")
+            })
+            .count();
         let only_name_children = is_insert
             && !has_nested_item
-            && !children.is_empty()
+            && name_child_count > 0
             && children.iter().all(|c| {
                 let t = c.trim();
                 t.is_empty() || (line_indent(c) > 0 && t.starts_with("name:"))
