@@ -1434,7 +1434,7 @@ pub async fn uninstall_plugin(
         // anything keyed by the raw package id.
         let entry_ids = installed_entry_ids(&dir, &input.plugin_id)
             .unwrap_or_else(|| vec![cordis_id_of(&input.plugin_id)]);
-        let mut cleaned = raw;
+        let mut cleaned = raw.clone();
         for id in &entry_ids {
             cleaned = strip_cordis_rows(&cleaned, id, &input.plugin_id);
         }
@@ -2333,7 +2333,7 @@ fn ensure_cordis_insert(dir: &std::path::Path, plugin_id: &str) -> Result<(), St
     let mounted = collect_mount_ids(&raw).contains(&cordis_id);
     let patched = split_patch_segments(&raw).into_iter().any(|seg| {
         matches!(&seg, PatchSeg::Item { header, .. }
-            if top_level_row_id(header).as_deref() == Some(cordis_id))
+            if top_level_row_id(header).as_deref() == Some(cordis_id.as_str()))
     });
     if mounted || patched {
         return Ok(());
